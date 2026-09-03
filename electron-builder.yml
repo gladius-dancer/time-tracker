@@ -1,0 +1,67 @@
+appId: com.timetracker.app
+productName: Time Tracker
+copyright: Copyright © 2026
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the compiled output ships; sources and build tooling stay out of the app.
+files:
+  - dist/**/*
+  - package.json
+
+asar: true
+
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [universal]
+    - target: zip
+      arch: [universal]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    # Screen capture and cross-app scripting both prompt on macOS; these strings
+    # are what the system shows the user in that prompt.
+    NSAppleEventsUsageDescription: >-
+      Time Tracker reads the address of the front browser tab so it can record the
+      links you open while a task is being tracked.
+    NSCameraUsageDescription: Not used.
+    NSMicrophoneUsageDescription: Not used.
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Time Tracker
+
+linux:
+  icon: build/icon.png
+  category: Utility
+  synopsis: Time tracking with screenshots and link capture
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+protocols:
+  - name: Time Tracker
+    schemes: [timetracker]

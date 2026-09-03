@@ -1,0 +1,35 @@
+{
+  "name": "time-tracker",
+  "productName": "Time Tracker",
+  "version": "1.0.0",
+  "description": "Desktop time tracker with screenshot and opened-link tracking",
+  "main": "dist/main/index.js",
+  "author": "Time Tracker",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "dev": "node scripts/build.mjs --watch",
+    "smoke": "node scripts/build.mjs --smoke && node dist/smoke.node.js",
+    "smoke:electron": "node scripts/build.mjs --smoke && electron dist/smoke.electron.js",
+    "test:e2e": "npm run build && node tests/e2e/run.mjs",
+    "test": "npm run typecheck && npm run smoke && npm run test:e2e",
+    "package:mac": "npm run build && electron-builder --mac --universal",
+    "package:win": "npm run build && electron-builder --win --x64 --arm64",
+    "package:linux": "npm run build && electron-builder --linux --x64 --arm64",
+    "package:all": "npm run build && electron-builder --mac --universal --win --linux"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "electron": "^44.1.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

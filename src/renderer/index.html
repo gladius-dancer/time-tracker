@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';"
+    />
+    <title>Time Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="titlebar">
+        <div class="titlebar__brand">
+        </div>
+        <div class="titlebar__actions">
+          <div class="live-pill" id="live-pill" hidden>
+            <span class="live-pill__dot" aria-hidden="true"></span>
+            <span id="live-pill-text">Tracking</span>
+          </div>
+          <label class="switch" title="Show capture diagnostics, screenshots and detected links">
+            <input type="checkbox" id="debug-toggle" />
+            <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+            <span class="switch__label">Debug Mode</span>
+          </label>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel panel--tasks" aria-label="Tasks">
+          <div class="panel__head">
+            <h2 class="panel__title">Tasks</h2>
+            <span class="panel__count" id="task-count"></span>
+          </div>
+
+          <form class="new-task" id="new-task-form">
+            <input
+              id="new-task-input"
+              class="new-task__input"
+              type="text"
+              placeholder="Add a task…"
+              autocomplete="off"
+              maxlength="120"
+            />
+            <button class="new-task__button" type="submit" title="Add task">+</button>
+          </form>
+
+          <div class="task-list" id="task-list" role="listbox" aria-label="Task list"></div>
+        </section>
+
+        <section class="panel panel--tracker" aria-label="Tracking">
+          <div id="tracker-root"></div>
+          <div id="debug-root"></div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+    <!-- Bundled to a classic script: ES modules are blocked by CORS when loaded over file://. -->
+    <script defer src="renderer.js"></script>
+  </body>
+</html>
