@@ -2,10 +2,13 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import { IpcChannel, IpcEvent, type TimeTrackerApi, type TickPayload, type ToastPayload } from '../shared/ipc';
 import type {
+  ActiveApplication,
   AppSnapshot,
+  AppUsagePeriod,
   DebugData,
   OpenedLink,
   ScreenshotId,
+  SessionId,
   Settings,
   StartResult,
   StopResult,
@@ -48,6 +51,13 @@ const api: TimeTrackerApi = {
   revealScreenshot: (id: ScreenshotId) => ipcRenderer.invoke(IpcChannel.RevealScreenshot, id) as Promise<void>,
   openLinkExternally: (url: string) => ipcRenderer.invoke(IpcChannel.OpenLinkExternally, url) as Promise<void>,
   addManualLink: (url: string) => ipcRenderer.invoke(IpcChannel.AddManualLink, url) as Promise<OpenedLink | null>,
+
+  getCurrentApplication: () =>
+    ipcRenderer.invoke(IpcChannel.GetCurrentApplication) as Promise<ActiveApplication | null>,
+  getUsageForSession: (sessionId: SessionId) =>
+    ipcRenderer.invoke(IpcChannel.GetUsageForSession, sessionId) as Promise<AppUsagePeriod[]>,
+  getUsageForTask: (taskId: TaskId) =>
+    ipcRenderer.invoke(IpcChannel.GetUsageForTask, taskId) as Promise<AppUsagePeriod[]>,
 
   onSnapshotChanged: (cb) => subscribe<AppSnapshot>(IpcEvent.SnapshotChanged, cb),
   onTick: (cb) => subscribe<TickPayload>(IpcEvent.Tick, cb),

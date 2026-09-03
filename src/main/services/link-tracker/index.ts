@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { LinkSource, LinkSourceStatus, OpenedLink, TrackingSession } from '../../../shared/types';
+import type { LinkSource, SourceStatus, OpenedLink, TrackingSession } from '../../../shared/types';
 import type { Repository } from '../../store/repository';
 import { ClipboardLinkSource } from './sources/clipboard';
 import { LinuxWindowLinkSource } from './sources/linux';
@@ -25,7 +25,7 @@ export interface LinkTrackerEvents {
  */
 export class LinkTracker {
   private readonly sources: LinkTrackingSource[];
-  private statuses: LinkSourceStatus[] = [];
+  private statuses: SourceStatus[] = [];
   private timer: NodeJS.Timeout | null = null;
   private session: TrackingSession | null = null;
   private polling = false;
@@ -44,7 +44,7 @@ export class LinkTracker {
   }
 
   /** Runs each source's availability probe once; results feed the diagnostics panel. */
-  async probeSources(): Promise<LinkSourceStatus[]> {
+  async probeSources(): Promise<SourceStatus[]> {
     this.statuses = await Promise.all(
       this.sources.map(async (source) => {
         try {
@@ -63,7 +63,7 @@ export class LinkTracker {
     return this.statuses;
   }
 
-  get sourceStatuses(): LinkSourceStatus[] {
+  get sourceStatuses(): SourceStatus[] {
     return this.statuses;
   }
 

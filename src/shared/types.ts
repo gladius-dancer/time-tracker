@@ -13,6 +13,7 @@ export type TaskId = string;
 export type SessionId = string;
 export type ScreenshotId = string;
 export type LinkId = string;
+export type AppUsageId = string;
 
 // ---------------------------------------------------------------------------
 // Task
@@ -98,6 +99,61 @@ export interface OpenedLink {
 }
 
 // ---------------------------------------------------------------------------
+// Application usage
+// ---------------------------------------------------------------------------
+
+/** The foreground application at a point in time. */
+export interface ActiveApplication {
+  /** Human readable name, e.g. "Safari". */
+  name: string;
+  /** Stable identifier where the OS provides one: bundle id, or process name. */
+  appId: string | null;
+  /** Executable / process name, e.g. "Safari" or "chrome.exe". */
+  processName: string | null;
+  detectedAt: IsoDateString;
+}
+
+/**
+ * A continuous stretch of time spent in one application during one session.
+ * Consecutive polls that see the same application extend a single period rather
+ * than creating a new one.
+ */
+export interface AppUsagePeriod {
+  id: AppUsageId;
+  sessionId: SessionId;
+  taskId: TaskId;
+  taskName: string;
+  appName: string;
+  appId: string | null;
+  processName: string | null;
+  startedAt: IsoDateString;
+  /** Advanced on every poll while this application stays in the foreground. */
+  endedAt: IsoDateString;
+  durationMs: Millis;
+}
+
+/** Aggregate of many periods, used by every Debug Mode grouping. */
+export interface AppUsageSummary {
+  appName: string;
+  appId: string | null;
+  totalMs: Millis;
+  /** How many separate usage periods were merged into this summary. */
+  periodCount: number;
+  firstStartedAt: IsoDateString;
+  lastEndedAt: IsoDateString;
+  /** Distinct task names this application was used under. */
+  taskNames: string[];
+}
+
+/** Application usage rolled up under one task. */
+export interface TaskAppUsage {
+  taskId: TaskId;
+  taskName: string;
+  totalMs: Millis;
+  apps: AppUsageSummary[];
+}
+
+// ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
@@ -106,6 +162,7 @@ export interface Settings {
   screenshotIntervalMs: Millis;
   screenshotsEnabled: boolean;
   linkTrackingEnabled: boolean;
+  appUsageEnabled: boolean;
   notificationsEnabled: boolean;
 }
 
@@ -137,14 +194,17 @@ export type PermissionState = 'granted' | 'denied' | 'restricted' | 'not-determi
 export interface Diagnostics {
   screenPermission: PermissionState;
   /** Per-source availability for link tracking on this OS. */
-  linkSources: LinkSourceStatus[];
+  linkSources: SourceStatus[];
+  /** Per-source availability for foreground-application detection on this OS. */
+  appUsageSources: SourceStatus[];
   /** `process.platform` value, e.g. 'darwin' | 'win32' | 'linux'. */
   platform: string;
   dataDirectory: string;
   screenshotsDirectory: string;
 }
 
-export interface LinkSourceStatus {
+/** Availability of one OS-specific detection strategy, shown in Diagnostics. */
+export interface SourceStatus {
   id: string;
   label: string;
   available: boolean;
@@ -171,12 +231,20 @@ export interface SessionActivity {
   session: TrackingSession;
   screenshots: Screenshot[];
   links: OpenedLink[];
+  appUsage: AppUsagePeriod[];
+  /** Per-application totals within this session. */
+  appSummaries: AppUsageSummary[];
 }
 
 export interface DebugData {
   sessions: SessionActivity[];
   totalScreenshots: number;
   totalLinks: number;
+  totalAppUsageMs: Millis;
+  /** Application usage grouped by task. */
+  appUsageByTask: TaskAppUsage[];
+  /** Application usage grouped by application, across every session. */
+  appUsageByApp: AppUsageSummary[];
 }
 
 // ---------------------------------------------------------------------------

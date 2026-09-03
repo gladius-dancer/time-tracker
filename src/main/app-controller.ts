@@ -3,8 +3,11 @@ import { join } from 'node:path';
 
 import { IpcEvent, type TickPayload, type ToastPayload } from '../shared/ipc';
 import type {
+  ActiveApplication,
   ActiveTracking,
   AppSnapshot,
+  AppUsagePeriod,
+  AppUsageSummary,
   CaptureState,
   DebugData,
   Diagnostics,
@@ -12,12 +15,15 @@ import type {
   Screenshot,
   ScreenshotId,
   SessionActivity,
+  SessionId,
   Settings,
   StartResult,
   StopResult,
+  TaskAppUsage,
   TaskId,
   TaskView,
 } from '../shared/types';
+import { ApplicationUsageTracker } from './services/app-usage';
 import { LinkTracker } from './services/link-tracker';
 import { NotificationService } from './services/notifications';
 import { ScreenshotService } from './services/screenshot';
@@ -37,6 +43,7 @@ export class AppController {
   private readonly tracker: TimeTracker;
   private readonly screenshots: ScreenshotService;
   private readonly links: LinkTracker;
+  private readonly appUsage: ApplicationUsageTracker;
   private readonly notifications: NotificationService;
 
   private capture: CaptureState = { phase: 'idle' };
@@ -70,6 +77,10 @@ export class AppController {
       onLinksRecorded: () => this.broadcast(IpcEvent.ActivityChanged, undefined),
     });
 
+    this.appUsage = new ApplicationUsageTracker(this.repository, {
+      onUsageChanged: () => this.broadcast(IpcEvent.ActivityChanged, undefined),
+    });
+
     this.tracker = new TimeTracker(this.repository, {
       onStarted: () => this.broadcastSnapshot(),
       onTick: (active) => this.onTick(active),
@@ -78,7 +89,7 @@ export class AppController {
   }
 
   async init(): Promise<void> {
-    await this.links.probeSources();
+    await Promise.all([this.links.probeSources(), this.appUsage.probeSources()]);
   }
 
   // -- broadcasting --------------------------------------------------------
@@ -138,6 +149,7 @@ export class AppController {
     return {
       screenPermission: this.screenshots.permissionState(),
       linkSources: this.links.sourceStatuses,
+      appUsageSources: this.appUsage.sourceStatuses,
       platform: process.platform,
       dataDirectory: app.getPath('userData'),
       screenshotsDirectory: this.repository.screenshotsDir,
@@ -208,6 +220,9 @@ export class AppController {
     if (settings.linkTrackingEnabled) {
       await this.links.start(session);
     }
+    if (settings.appUsageEnabled) {
+      this.appUsage.startTracking(session.id, session.taskId, session.taskName);
+    }
     this.tracker.setNextScreenshotAt(this.screenshots.nextCaptureAtEpochMs);
 
     // Keep the machine from suspending the app's timers during a session.
@@ -227,6 +242,8 @@ export class AppController {
 
     this.screenshots.stop();
     this.links.stop();
+    // Application detection must end with the session, not on its next poll.
+    this.appUsage.stopTracking();
 
     const result = this.tracker.stop();
     if (this.powerSaveBlockerId !== null) {
@@ -276,6 +293,14 @@ export class AppController {
       } else {
         this.links.stop();
       }
+
+      if (settings.appUsageEnabled) {
+        if (!this.appUsage.isTracking) {
+          this.appUsage.startTracking(session.id, session.taskId, session.taskName);
+        }
+      } else {
+        this.appUsage.stopTracking();
+      }
       this.tracker.setNextScreenshotAt(this.screenshots.nextCaptureAtEpochMs);
     }
 
@@ -288,8 +313,11 @@ export class AppController {
   getDebugData(): DebugData {
     const screenshots = this.repository.listScreenshots();
     const links = this.repository.listLinks();
+    const appUsage = this.repository.listAppUsage();
+
     const byScreenshot = new Map<string, Screenshot[]>();
     const byLink = new Map<string, OpenedLink[]>();
+    const byUsage = new Map<string, AppUsagePeriod[]>();
 
     for (const shot of screenshots) {
       const bucket = byScreenshot.get(shot.sessionId) ?? [];
@@ -301,14 +329,61 @@ export class AppController {
       bucket.push(link);
       byLink.set(link.sessionId, bucket);
     }
+    for (const period of appUsage) {
+      const bucket = byUsage.get(period.sessionId) ?? [];
+      bucket.push(period);
+      byUsage.set(period.sessionId, bucket);
+    }
 
-    const sessions: SessionActivity[] = this.repository.listSessions().map((session) => ({
-      session,
-      screenshots: byScreenshot.get(session.id) ?? [],
-      links: byLink.get(session.id) ?? [],
-    }));
+    const sessions: SessionActivity[] = this.repository.listSessions().map((session) => {
+      const periods = byUsage.get(session.id) ?? [];
+      return {
+        session,
+        screenshots: byScreenshot.get(session.id) ?? [],
+        links: byLink.get(session.id) ?? [],
+        appUsage: periods,
+        appSummaries: summariseApps(periods),
+      };
+    });
 
-    return { sessions, totalScreenshots: screenshots.length, totalLinks: links.length };
+    // Grouped by task: one entry per task that has any recorded usage.
+    const byTask = new Map<TaskId, AppUsagePeriod[]>();
+    for (const period of appUsage) {
+      const bucket = byTask.get(period.taskId) ?? [];
+      bucket.push(period);
+      byTask.set(period.taskId, bucket);
+    }
+    const appUsageByTask: TaskAppUsage[] = [...byTask.entries()]
+      .map(([taskId, periods]) => ({
+        taskId,
+        taskName: this.repository.getTask(taskId)?.name ?? periods[0]?.taskName ?? 'Deleted task',
+        totalMs: periods.reduce((sum, p) => sum + p.durationMs, 0),
+        apps: summariseApps(periods),
+      }))
+      .sort((a, b) => b.totalMs - a.totalMs);
+
+    return {
+      sessions,
+      totalScreenshots: screenshots.length,
+      totalLinks: links.length,
+      totalAppUsageMs: appUsage.reduce((sum, p) => sum + p.durationMs, 0),
+      appUsageByTask,
+      appUsageByApp: summariseApps(appUsage),
+    };
+  }
+
+  // -- application usage (the ApplicationUsageTracker API, exposed over IPC) --
+
+  getCurrentApplication(): Promise<ActiveApplication | null> {
+    return this.appUsage.getCurrentApplication();
+  }
+
+  getUsageForSession(sessionId: SessionId): AppUsagePeriod[] {
+    return this.appUsage.getUsageForSession(sessionId);
+  }
+
+  getUsageForTask(taskId: TaskId): AppUsagePeriod[] {
+    return this.appUsage.getUsageForTask(taskId);
   }
 
   readScreenshotDataUrl(id: ScreenshotId): Promise<string | null> {
@@ -347,6 +422,7 @@ export class AppController {
   shutdown(): void {
     this.screenshots.stop();
     this.links.stop();
+    this.appUsage.stopTracking();
     this.tracker.stopIfRunning();
     if (this.powerSaveBlockerId !== null) {
       powerSaveBlocker.stop(this.powerSaveBlockerId);
@@ -354,6 +430,40 @@ export class AppController {
     }
     this.repository.flushSync();
   }
+}
+
+/**
+ * Rolls periods up per application. Used for all three Debug Mode groupings --
+ * by session, by task and overall — so the numbers are consistent between them.
+ */
+function summariseApps(periods: AppUsagePeriod[]): AppUsageSummary[] {
+  const byApp = new Map<string, AppUsageSummary>();
+
+  for (const period of periods) {
+    const key = `${period.appId ?? ''}|${period.appName}`;
+    const existing = byApp.get(key);
+    if (!existing) {
+      byApp.set(key, {
+        appName: period.appName,
+        appId: period.appId,
+        totalMs: period.durationMs,
+        periodCount: 1,
+        firstStartedAt: period.startedAt,
+        lastEndedAt: period.endedAt,
+        taskNames: [period.taskName].filter(Boolean),
+      });
+      continue;
+    }
+    existing.totalMs += period.durationMs;
+    existing.periodCount += 1;
+    if (period.startedAt < existing.firstStartedAt) existing.firstStartedAt = period.startedAt;
+    if (period.endedAt > existing.lastEndedAt) existing.lastEndedAt = period.endedAt;
+    if (period.taskName && !existing.taskNames.includes(period.taskName)) {
+      existing.taskNames.push(period.taskName);
+    }
+  }
+
+  return [...byApp.values()].sort((a, b) => b.totalMs - a.totalMs);
 }
 
 function formatDuration(ms: number): string {

@@ -104,6 +104,7 @@ try {
       pillVisible: getComputedStyle(document.getElementById('live-pill')).display !== 'none',
       screenPermission: s.diagnostics.screenPermission,
       linkSources: s.diagnostics.linkSources.map(x => x.label + '=' + (x.available ? 'ok' : 'unavailable')),
+      appSources: s.diagnostics.appUsageSources.map(x => x.label + '=' + (x.available ? 'ok' : 'unavailable')),
     };
   `);
   check('main process reports the active task', tracking.activeTask === 'E2E task');
@@ -112,6 +113,7 @@ try {
   check('header tracking pill is visible', tracking.pillVisible);
   console.log(`        screen permission: ${tracking.screenPermission}`);
   console.log(`        link sources: ${tracking.linkSources.join(', ')}`);
+  console.log(`        app sources:  ${tracking.appSources.join(', ')}`);
 
   console.log('\n4. Clipboard link detection');
   let previousClipboard = null;
@@ -143,7 +145,34 @@ try {
     console.log('        (skipped: no clipboard tool wired up for this platform)');
   }
 
-  console.log('\n5. Stop and report');
+  console.log('\n5. Application usage');
+  const currentApp = await evaluate('return await window.timeTracker.getCurrentApplication();');
+  const appSupported = currentApp !== null;
+  if (appSupported) {
+    console.log(`        foreground app: ${currentApp.name}${currentApp.appId ? ` (${currentApp.appId})` : ''}`);
+    check('getCurrentApplication returns a named app over IPC', typeof currentApp.name === 'string' && currentApp.name.length > 0);
+
+    const usage = await evaluate(`
+      const s = await window.timeTracker.getSnapshot();
+      const bySession = await window.timeTracker.getUsageForSession(s.active.sessionId);
+      const byTask = await window.timeTracker.getUsageForTask(s.active.taskId);
+      return {
+        sessionCount: bySession.length,
+        taskCount: byTask.length,
+        first: bySession[0] || null,
+      };
+    `);
+    check('usage is queryable by session over IPC', usage.sessionCount >= 1, `${usage.sessionCount} period(s)`);
+    check('usage is queryable by task over IPC', usage.taskCount === usage.sessionCount);
+    check(
+      'a period carries app, task, session and timing',
+      Boolean(usage.first?.appName && usage.first?.taskId && usage.first?.sessionId && usage.first?.startedAt && usage.first?.endedAt),
+    );
+  } else {
+    console.log('        (no foreground app detectable here — detection path skipped)');
+  }
+
+  console.log('\n6. Stop and report');
   const stopped = await evaluate(`
     const r = await window.timeTracker.stopTracking();
     await new Promise(res => setTimeout(res, 300));
@@ -156,19 +185,60 @@ try {
   check('reported time saved on the task', stopped.reportedMs >= 3_000, `${stopped.reportedMs}ms`);
   check('nothing is tracking afterwards', stopped.active === null);
 
-  console.log('\n6. Debug Mode');
+  console.log('\n7. Debug Mode');
   const debugOn = await evaluate(`
     await window.timeTracker.updateSettings({ debugMode: true });
     await new Promise(res => setTimeout(res, 600));
     return { sections: document.querySelectorAll('.debug').length, tabs: [...document.querySelectorAll('.tab')].map(t => t.textContent) };
   `);
   check('debug section appears', debugOn.sections === 1, debugOn.tabs.join(' / '));
+  check('Applications Used tab is present', debugOn.tabs.includes('Applications Used'));
+
+  if (appSupported) {
+    const appsTab = await evaluate(`
+      [...document.querySelectorAll('.tab')].find(b => b.textContent === 'Applications Used').click();
+      await new Promise(res => setTimeout(res, 400));
+      return {
+        groupings: [...document.querySelectorAll('.segmented__item')].map(b => b.textContent),
+        rows: document.querySelectorAll('.app-row').length,
+        firstApp: document.querySelector('.app-row__name') && document.querySelector('.app-row__name').textContent,
+        total: document.querySelector('.app-row__total') && document.querySelector('.app-row__total').textContent,
+      };
+    `);
+    check('all three groupings are offered', appsTab.groupings.join(' / ') === 'By task / By session / By application', appsTab.groupings.join(' / '));
+    check('application rows render with a name and total', appsTab.rows >= 1 && Boolean(appsTab.firstApp), `${appsTab.rows} row(s), first=${appsTab.firstApp} ${appsTab.total}`);
+
+    for (const [label, selector] of [['By session', '.periods'], ['By application', '.app-row__tasks']]) {
+      const switched = await evaluate(`
+        [...document.querySelectorAll('.segmented__item')].find(b => b.textContent === ${JSON.stringify(label)}).click();
+        await new Promise(res => setTimeout(res, 300));
+        return { rows: document.querySelectorAll('.app-row').length, marker: document.querySelectorAll(${JSON.stringify(selector)}).length };
+      `);
+      check(`grouping "${label}" renders`, switched.rows >= 1 && switched.marker >= 1, `${switched.rows} row(s)`);
+    }
+  }
   const debugOff = await evaluate(`
     await window.timeTracker.updateSettings({ debugMode: false });
     await new Promise(res => setTimeout(res, 400));
-    return document.querySelectorAll('.debug, .shot, .link').length;
+    return document.querySelectorAll('.debug, .shot, .link, .app-row, .periods').length;
   `);
-  check('debug UI fully removed when off', debugOff === 0);
+  check('debug UI fully removed when off (including applications)', debugOff === 0);
+
+  // Collection must continue with Debug Mode off — only display is gated.
+  if (appSupported) {
+    const stillCollecting = await evaluate(`
+      const s = await window.timeTracker.getSnapshot();
+      const t = s.tasks.find(t => t.id === ${JSON.stringify(task.id)});
+      await window.timeTracker.startTracking(t.id);
+      await new Promise(res => setTimeout(res, 5000));
+      const active = (await window.timeTracker.getSnapshot()).active;
+      const during = await window.timeTracker.getUsageForSession(active.sessionId);
+      await window.timeTracker.stopTracking();
+      return { periods: during.length, visible: document.querySelectorAll('.app-row').length };
+    `);
+    check('usage is still collected while Debug Mode is off', stillCollecting.periods >= 1, `${stillCollecting.periods} period(s)`);
+    check('but nothing is displayed', stillCollecting.visible === 0);
+  }
 
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
   const shotPath = join(userDataDir, 'window.png');

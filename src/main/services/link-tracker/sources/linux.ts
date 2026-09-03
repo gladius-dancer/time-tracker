@@ -1,4 +1,4 @@
-import { commandExists, run } from '../exec';
+import { commandExists, run } from '../../exec';
 import { normaliseUrl } from '../url';
 import type { DetectedLink, LinkTrackingSource, SourceAvailability } from './types';
 

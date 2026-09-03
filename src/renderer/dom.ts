@@ -12,6 +12,9 @@ export function el<K extends keyof HTMLElementTagNameMap>(
     if (value === null || value === undefined || value === false) continue;
     if (key === 'class') node.className = String(value);
     else if (key === 'text') node.textContent = String(value);
+    // Assign styles through the CSSOM: the page's CSP forbids `style` attributes
+    // (`style-src 'self'`), and setAttribute('style', …) is silently blocked by it.
+    else if (key === 'style') node.style.cssText = String(value);
     else if (value === true) node.setAttribute(key, '');
     else node.setAttribute(key, String(value));
   }

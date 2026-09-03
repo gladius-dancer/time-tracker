@@ -46,6 +46,7 @@ export function registerIpcHandlers(controller: AppController): void {
     if (typeof source.debugMode === 'boolean') clean.debugMode = source.debugMode;
     if (typeof source.screenshotsEnabled === 'boolean') clean.screenshotsEnabled = source.screenshotsEnabled;
     if (typeof source.linkTrackingEnabled === 'boolean') clean.linkTrackingEnabled = source.linkTrackingEnabled;
+    if (typeof source.appUsageEnabled === 'boolean') clean.appUsageEnabled = source.appUsageEnabled;
     if (typeof source.notificationsEnabled === 'boolean') clean.notificationsEnabled = source.notificationsEnabled;
     if (typeof source.screenshotIntervalMs === 'number' && Number.isFinite(source.screenshotIntervalMs)) {
       clean.screenshotIntervalMs = source.screenshotIntervalMs;
@@ -70,4 +71,16 @@ export function registerIpcHandlers(controller: AppController): void {
   );
 
   ipcMain.handle(IpcChannel.AddManualLink, (_event, url: unknown) => controller.addManualLink(asString(url)));
+
+  ipcMain.handle(IpcChannel.GetCurrentApplication, () => controller.getCurrentApplication());
+
+  ipcMain.handle(IpcChannel.GetUsageForSession, (_event, id: unknown) => {
+    const sessionId = asTaskId(id);
+    return sessionId ? controller.getUsageForSession(sessionId) : [];
+  });
+
+  ipcMain.handle(IpcChannel.GetUsageForTask, (_event, id: unknown) => {
+    const taskId = asTaskId(id);
+    return taskId ? controller.getUsageForTask(taskId) : [];
+  });
 }

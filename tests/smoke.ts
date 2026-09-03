@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AppController } from '../src/main/app-controller';
+import { runAppUsageChecks } from './app-usage';
 
 let failures = 0;
 
@@ -78,7 +79,7 @@ export async function runSmoke(): Promise<number> {
   check('unrelated settings do not reset the screenshot schedule', nextBefore === nextAfter);
   controller.updateSettings({ notificationsEnabled: true });
 
-  console.log('\n   waiting ~6s for a scheduled screenshot…');
+  console.log('\n   waiting ~6s for a scheduled screenshot and application samples…');
   await sleep(6_500);
 
   const debug = controller.getDebugData();
@@ -96,6 +97,36 @@ export async function runSmoke(): Promise<number> {
     // that it is recorded rather than swallowed.
     check('failed capture is recorded with a reason', Boolean(shots[0]?.error), shots[0]?.error ?? '');
     console.log('        (screen capture unavailable in this environment — error path verified instead)');
+  }
+
+  // -- application usage ---------------------------------------------------
+  const currentApp = await controller.getCurrentApplication();
+  const appSupported = currentApp !== null;
+  if (appSupported) {
+    console.log(`   foreground application detected: ${currentApp.name}${currentApp.appId ? ` (${currentApp.appId})` : ''}`);
+    check('getCurrentApplication reports a name', currentApp.name.length > 0);
+
+    const sessionUsage = controller.getUsageForSession(start.active!.sessionId);
+    check('usage recorded for the session', sessionUsage.length >= 1, `${sessionUsage.length} period(s)`);
+
+    const period = sessionUsage[0];
+    check('period carries task and session', period?.taskId === task.id && period?.sessionId === start.active?.sessionId);
+    check('period has start, end and duration', Boolean(period && period.startedAt && period.endedAt && period.durationMs >= 0));
+
+    const taskUsage = controller.getUsageForTask(task.id);
+    check('usage is queryable by task', taskUsage.length === sessionUsage.length);
+
+    // Consecutive samples of the same app must extend one period, not append.
+    const distinctApps = new Set(sessionUsage.map((p) => `${p.appId}|${p.appName}`));
+    check(
+      'consecutive samples coalesce into one period per application',
+      sessionUsage.length === distinctApps.size,
+      `${sessionUsage.length} period(s), ${distinctApps.size} distinct app(s)`,
+    );
+    check('an extended period accumulated real time', Math.max(...sessionUsage.map((p) => p.durationMs)) >= 2_000);
+  } else {
+    console.log('   (no foreground application detectable in this environment — detection path skipped)');
+    check('unsupported detection degrades to no usage rather than an error', controller.getUsageForSession(start.active!.sessionId).length === 0);
   }
 
   const elapsedBeforeStop = controller.snapshot().active?.elapsedMs ?? 0;
@@ -117,6 +148,17 @@ export async function runSmoke(): Promise<number> {
 
   const afterStop = controller.addManualLink('https://example.com/after-stop');
   check('links are not recorded outside a session', afterStop === null);
+
+  if (appSupported) {
+    // Application tracking must halt with the session, not on its next poll.
+    const usageAtStop = controller.getUsageForTask(task.id);
+    const totalAtStop = usageAtStop.reduce((sum, p) => sum + p.durationMs, 0);
+    await sleep(3_000);
+    const usageAfter = controller.getUsageForTask(task.id);
+    const totalAfter = usageAfter.reduce((sum, p) => sum + p.durationMs, 0);
+    check('application tracking stops immediately with the session', totalAfter === totalAtStop, `${totalAtStop}ms -> ${totalAfter}ms`);
+    check('no new periods appear after stopping', usageAfter.length === usageAtStop.length);
+  }
 
   controller.updateSettings({ debugMode: true });
   check('debug mode can be enabled', controller.snapshot().settings.debugMode);
@@ -150,6 +192,16 @@ export async function runSmoke(): Promise<number> {
     `${reloadedSession?.links.length ?? 0} link(s) restored`,
   );
   check('its screenshot metadata survives a restart', (reloadedSession?.screenshots.length ?? 0) >= 1);
+  if (appSupported) {
+    check('its application usage survives a restart', (reloadedSession?.appUsage.length ?? 0) >= 1, `${reloadedSession?.appUsage.length ?? 0} period(s)`);
+    check('per-session application summaries are computed', (reloadedSession?.appSummaries.length ?? 0) >= 1);
+    check('application usage is grouped by task', reloadedDebug.appUsageByTask.length >= 1);
+    check('application usage is grouped by application', reloadedDebug.appUsageByApp.length >= 1);
+    const byTaskTotal = reloadedDebug.appUsageByTask.reduce((sum, t) => sum + t.totalMs, 0);
+    const byAppTotal = reloadedDebug.appUsageByApp.reduce((sum, a) => sum + a.totalMs, 0);
+    check('the groupings agree on the total', byTaskTotal === byAppTotal && byAppTotal === reloadedDebug.totalAppUsageMs,
+      `task=${byTaskTotal} app=${byAppTotal} total=${reloadedDebug.totalAppUsageMs}`);
+  }
   restarted.shutdown();
 
   // -- crash recovery ------------------------------------------------------
@@ -173,6 +225,9 @@ export async function runSmoke(): Promise<number> {
   crashy.shutdown();
 
   await fs.rm(dataDir, { recursive: true, force: true });
+
+  console.log('\n6. Application usage coalescing (scripted detector)');
+  await runAppUsageChecks(check);
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   return failures === 0 ? 0 : 1;

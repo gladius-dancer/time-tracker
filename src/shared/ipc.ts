@@ -5,10 +5,13 @@
  */
 
 import type {
+  ActiveApplication,
   AppSnapshot,
+  AppUsagePeriod,
   DebugData,
   OpenedLink,
   ScreenshotId,
+  SessionId,
   Settings,
   StartResult,
   StopResult,
@@ -35,6 +38,10 @@ export const IpcChannel = {
   RevealScreenshot: 'debug:reveal-screenshot',
   OpenLinkExternally: 'debug:open-link',
   AddManualLink: 'debug:add-manual-link',
+  // application usage
+  GetCurrentApplication: 'app-usage:current',
+  GetUsageForSession: 'app-usage:for-session',
+  GetUsageForTask: 'app-usage:for-task',
 } as const;
 
 /** Main -> renderer, push events. */
@@ -81,6 +88,11 @@ export interface TimeTrackerApi {
   revealScreenshot(id: ScreenshotId): Promise<void>;
   openLinkExternally(url: string): Promise<void>;
   addManualLink(url: string): Promise<OpenedLink | null>;
+
+  /** The `ApplicationUsageTracker` query API, surfaced to the renderer. */
+  getCurrentApplication(): Promise<ActiveApplication | null>;
+  getUsageForSession(sessionId: SessionId): Promise<AppUsagePeriod[]>;
+  getUsageForTask(taskId: TaskId): Promise<AppUsagePeriod[]>;
 
   onSnapshotChanged(cb: (snapshot: AppSnapshot) => void): () => void;
   onTick(cb: (tick: TickPayload) => void): () => void;

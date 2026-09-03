@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
+  AppUsageId,
+  AppUsagePeriod,
   IsoDateString,
   Millis,
   OpenedLink,
@@ -23,6 +25,7 @@ interface Database {
   sessions: TrackingSession[];
   screenshots: Screenshot[];
   links: OpenedLink[];
+  appUsage: AppUsagePeriod[];
   settings: Settings;
   ui: { selectedTaskId: TaskId | null };
 }
@@ -32,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   screenshotIntervalMs: 60_000,
   screenshotsEnabled: true,
   linkTrackingEnabled: true,
+  appUsageEnabled: true,
   notificationsEnabled: true,
 };
 
@@ -40,6 +44,7 @@ const DB_VERSION = 1;
 /** Keeps the on-disk document from growing without bound. */
 const MAX_SCREENSHOT_RECORDS = 2_000;
 const MAX_LINK_RECORDS = 5_000;
+const MAX_APP_USAGE_RECORDS = 10_000;
 
 function now(): IsoDateString {
   return new Date().toISOString();
@@ -62,6 +67,7 @@ export class Repository {
       sessions: [],
       screenshots: [],
       links: [],
+      appUsage: [],
       settings: { ...DEFAULT_SETTINGS },
       ui: { selectedTaskId: null },
     }));
@@ -89,6 +95,9 @@ export class Repository {
         }
         for (const link of db.links) {
           if (link.sessionId === session.id) marks.push(Date.parse(link.detectedAt));
+        }
+        for (const period of db.appUsage) {
+          if (period.sessionId === session.id) marks.push(Date.parse(period.endedAt));
         }
         const endedAtMs = Math.max(...marks);
         const durationMs = Math.max(0, endedAtMs - Date.parse(session.startedAt));
@@ -161,6 +170,7 @@ export class Repository {
       db.sessions = db.sessions.filter((s) => s.taskId !== id);
       db.screenshots = db.screenshots.filter((s) => s.taskId !== id);
       db.links = db.links.filter((l) => l.taskId !== id);
+      db.appUsage = db.appUsage.filter((a) => a.taskId !== id);
       if (db.ui.selectedTaskId === id) db.ui.selectedTaskId = null;
     });
     await Promise.all(doomedFiles.map((file) => fs.unlink(file).catch(() => undefined)));
@@ -264,6 +274,50 @@ export class Repository {
       if (link.sessionId === sessionId) urls.add(link.url);
     }
     return urls;
+  }
+
+  // -- application usage ---------------------------------------------------
+
+  addAppUsage(period: AppUsagePeriod): void {
+    this.store.update((db) => {
+      db.appUsage.unshift(period);
+      if (db.appUsage.length > MAX_APP_USAGE_RECORDS) {
+        db.appUsage.length = MAX_APP_USAGE_RECORDS;
+      }
+    });
+  }
+
+  /**
+   * Advances an open period's end and duration. Called on every poll while one
+   * application stays in the foreground, so it writes in place rather than
+   * appending a row per sample.
+   */
+  updateAppUsage(id: AppUsageId, endedAt: IsoDateString, durationMs: Millis): void {
+    this.store.update((db) => {
+      const period = db.appUsage.find((a) => a.id === id);
+      if (!period) return;
+      period.endedAt = endedAt;
+      period.durationMs = Math.max(0, durationMs);
+    });
+  }
+
+  /** Drops a period that never accumulated measurable time. */
+  removeAppUsage(id: AppUsageId): void {
+    this.store.update((db) => {
+      db.appUsage = db.appUsage.filter((a) => a.id !== id);
+    });
+  }
+
+  listAppUsage(): AppUsagePeriod[] {
+    return [...this.store.state.appUsage];
+  }
+
+  appUsageForSession(sessionId: SessionId): AppUsagePeriod[] {
+    return this.store.state.appUsage.filter((a) => a.sessionId === sessionId);
+  }
+
+  appUsageForTask(taskId: TaskId): AppUsagePeriod[] {
+    return this.store.state.appUsage.filter((a) => a.taskId === taskId);
   }
 
   // -- settings ------------------------------------------------------------

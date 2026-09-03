@@ -60,7 +60,9 @@ src/
       time-tracker.ts    the authoritative clock
       screenshot.ts      scheduling, capture, permission handling
       notifications.ts   desktop notifications
+      exec.ts            timeout-guarded helper for shelling out to OS tools
       link-tracker/      pluggable per-OS URL detection
+      app-usage/         ApplicationUsageTracker + per-OS foreground detectors
   preload/           contextBridge surface — no ipcRenderer escape hatch
   renderer/          UI: store + components, no Node access at all
 ```
@@ -88,7 +90,9 @@ Request/response (`ipcRenderer.invoke`):
 | `createTask` / `renameTask` / `deleteTask` / `selectTask` | Task management |
 | `startTracking(taskId)` / `stopTracking()` | Session control |
 | `updateSettings(patch)` | Debug Mode, interval, capture toggles |
-| `getDebugData()` | Screenshots + links grouped by session |
+| `getDebugData()` | Screenshots, links and app usage grouped by session |
+| `getCurrentApplication()` | The foreground application right now |
+| `getUsageForSession(id)` / `getUsageForTask(id)` | Recorded application usage |
 | `readScreenshotDataUrl(id)` / `revealScreenshot(id)` | Debug Mode image access |
 | `openLinkExternally(url)` / `addManualLink(url)` | Debug Mode link actions |
 
@@ -141,12 +145,59 @@ Only browsers that are already running are queried — nothing is ever launched.
 Polling happens **only** while a session is active; outside one, the tracker does
 no work at all. URLs are canonicalised and de-duplicated per session.
 
+### Application usage
+
+`ApplicationUsageTracker` samples the foreground application every 2 seconds while
+a session runs and exposes a stable API to the main process:
+
+```ts
+startTracking(sessionId, taskId)   stopTracking()
+getCurrentApplication()
+getUsageForSession(sessionId)      getUsageForTask(taskId)
+```
+
+Detection is isolated behind one `ActiveApplicationSource` per platform, so the
+tracker itself contains no OS-specific code:
+
+| Platform | How | Permission |
+| --- | --- | --- |
+| macOS | `lsappinfo front` → Launch Services (AppleScript fallback) | none |
+| Windows | `GetForegroundWindow` + `GetWindowThreadProcessId` via PowerShell | none |
+| Linux | `xprop`/`xdotool` on `_NET_ACTIVE_WINDOW`, process name from `/proc` | X11 only |
+
+`lsappinfo` is used on macOS in preference to the more common
+`System Events … whose frontmost is true`, because the AppleScript route triggers
+the Automation privacy prompt and Launch Services does not.
+
+Consecutive samples of the same application **extend one period** rather than
+writing a row per poll, so storage stays proportional to how often the user
+switches apps. A period records the app name, its identifier (bundle id or
+executable), process name, start, end, duration, task and session. The open period
+is written to disk as it grows, so an unclean exit costs at most one interval.
+
+Time is only attributed while an application is actually detected. A failed
+detection, a desktop with nothing focused, or a machine that slept all close the
+open period and leave a gap — the durations are deliberately allowed not to sum to
+the session length. Tracking stops the instant the session does, not on the next
+poll, and a detector that throws is logged once and then suppressed so a broken
+platform cannot flood the log.
+
 ### Debug Mode
 
 Off by default. While off, no screenshot or link UI is rendered and the debug data
 is not even requested. Turning it on reveals a visually distinct section with
-three tabs — Screenshots, Opened Links and Diagnostics — with everything grouped
-by tracking session and labelled with its task and timestamp.
+four tabs — Screenshots, Opened Links, Applications Used and Diagnostics — with
+everything grouped by tracking session and labelled with its task and timestamp.
+
+**Applications Used** shows each application's name and identifier, total time, how
+many usage periods it accounts for, and its first/last use, under three groupings:
+by task, by session (with the individual periods expandable) and by application
+across every session. All three are roll-ups of the same periods, so the totals
+agree however the data is sliced.
+
+Debug Mode gates **display only**. Screenshots, links and application usage are all
+still collected while it is off; the UI simply does not render them, and the debug
+payload is never requested.
 
 ---
 
@@ -161,7 +212,7 @@ Everything lives under Electron's `userData` directory:
 | Linux | `~/.config/Time Tracker/` |
 
 * `time-tracker.json` — tasks, reported time, sessions, screenshot metadata,
-  opened links, settings and the current selection.
+  opened links, application usage, settings and the current selection.
 * `screenshots/` — the PNG files.
 
 Writes are atomic (temp file → fsync → rename) and debounced, with a synchronous
@@ -183,10 +234,13 @@ document store.
   attaches to the *Electron* binary rather than to "Time Tracker", so grant it to
   Electron when running `npm start`; a packaged build prompts under its own name.
 * **Windows** — no special permissions. UI Automation is the same channel screen
-  readers use.
-* **Linux** — screenshots need a portal-capable session; window-title scanning
-  needs `wmctrl` or `xdotool` and does not work under Wayland. Clipboard detection
-  works everywhere.
+  readers use, and the foreground-window API needs no elevation.
+* **Linux** — screenshots need a portal-capable session; window-title scanning and
+  foreground-application detection need `xprop`/`wmctrl`/`xdotool` and do not work
+  under Wayland. Clipboard detection works everywhere.
+
+Every detector reports its own availability in Debug Mode › Diagnostics, so an
+unsupported OS or a declined permission is visible rather than silent.
 
 ## Packaging notes
 

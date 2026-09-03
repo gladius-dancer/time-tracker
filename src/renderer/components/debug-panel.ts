@@ -1,9 +1,20 @@
-import type { AppSnapshot, DebugData, OpenedLink, Screenshot, SessionActivity } from '../../shared/types';
+import type {
+  AppSnapshot,
+  AppUsagePeriod,
+  AppUsageSummary,
+  DebugData,
+  OpenedLink,
+  Screenshot,
+  SessionActivity,
+} from '../../shared/types';
 import { clear, el, emptyState } from '../dom';
 import { formatBytes, formatCompact, formatDateTime, formatTime } from '../format';
 import type { Store } from '../store';
 
-type Tab = 'screenshots' | 'links' | 'diagnostics';
+type Tab = 'screenshots' | 'links' | 'apps' | 'diagnostics';
+
+/** How the Applications Used section rolls its data up. */
+type AppGrouping = 'task' | 'session' | 'application';
 
 /**
  * Debug Mode surface: screenshots, detected links and capture diagnostics.
@@ -14,6 +25,7 @@ type Tab = 'screenshots' | 'links' | 'diagnostics';
  */
 export class DebugPanel {
   private tab: Tab = 'screenshots';
+  private appGrouping: AppGrouping = 'task';
   private data: DebugData | null = null;
   private loading = false;
   private visible = false;
@@ -66,7 +78,9 @@ export class DebugPanel {
 
     const snapshot = this.store.snapshot;
     const totals = this.data
-      ? `${this.data.totalScreenshots} screenshots · ${this.data.totalLinks} links`
+      ? `${this.data.totalScreenshots} screenshots · ${this.data.totalLinks} links · ${formatCompact(
+          this.data.totalAppUsageMs,
+        )} app time`
       : '';
 
     this.root.append(
@@ -83,6 +97,7 @@ export class DebugPanel {
         el('div', { class: 'tabs', role: 'tablist' }, [
           this.tabButton('screenshots', 'Screenshots'),
           this.tabButton('links', 'Opened Links'),
+          this.tabButton('apps', 'Applications Used'),
           this.tabButton('diagnostics', 'Diagnostics'),
         ]),
 
@@ -94,7 +109,9 @@ export class DebugPanel {
               ])
             : this.tab === 'diagnostics'
               ? this.renderDiagnostics(snapshot)
-              : this.renderSessions(),
+              : this.tab === 'apps'
+                ? this.renderApplications()
+                : this.renderSessions(),
         ]),
       ]),
     );
@@ -254,6 +271,169 @@ export class DebugPanel {
     return list;
   }
 
+  // -- Applications Used ---------------------------------------------------
+
+  /**
+   * The same usage data under three groupings. Each one is a roll-up of the
+   * identical set of periods, so totals agree however the user slices it.
+   */
+  private renderApplications(): HTMLElement {
+    const data = this.data;
+    if (!data || data.appUsageByApp.length === 0) {
+      return emptyState(
+        'No application usage yet',
+        'The foreground application is sampled while a task is being tracked, and appears here grouped by task, session or application.',
+      );
+    }
+
+    return el('div', { class: 'apps' }, [
+      el('div', { class: 'apps__head' }, [
+        el('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Group applications by' }, [
+          this.groupButton('task', 'By task'),
+          this.groupButton('session', 'By session'),
+          this.groupButton('application', 'By application'),
+        ]),
+        el('span', {
+          class: 'apps__total',
+          text: `${formatCompact(data.totalAppUsageMs)} tracked across ${data.appUsageByApp.length} app${
+            data.appUsageByApp.length === 1 ? '' : 's'
+          }`,
+        }),
+      ]),
+      this.appGrouping === 'task'
+        ? this.renderAppsByTask(data)
+        : this.appGrouping === 'session'
+          ? this.renderAppsBySession(data)
+          : this.renderAppsByApplication(data),
+    ]);
+  }
+
+  private groupButton(grouping: AppGrouping, label: string): HTMLElement {
+    const button = el('button', {
+      class: `segmented__item${this.appGrouping === grouping ? ' segmented__item--active' : ''}`,
+      type: 'button',
+      role: 'tab',
+      'aria-selected': this.appGrouping === grouping ? 'true' : 'false',
+      text: label,
+    });
+    button.addEventListener('click', () => {
+      this.appGrouping = grouping;
+      this.render();
+    });
+    return button;
+  }
+
+  private renderAppsByTask(data: DebugData): HTMLElement {
+    const container = el('div', { class: 'app-groups' });
+    for (const task of data.appUsageByTask) {
+      container.append(
+        el('div', { class: 'app-group' }, [
+          el('div', { class: 'app-group__head' }, [
+            el('strong', { class: 'app-group__title', text: task.taskName }),
+            el('span', { class: 'app-group__total', text: formatCompact(task.totalMs) }),
+          ]),
+          this.appTable(task.apps, { showTasks: false }),
+        ]),
+      );
+    }
+    return container;
+  }
+
+  private renderAppsBySession(data: DebugData): HTMLElement {
+    const withUsage = data.sessions.filter((entry) => entry.appUsage.length > 0);
+    if (withUsage.length === 0) {
+      return emptyState('No application usage in any session', 'Start tracking a task to begin recording.');
+    }
+
+    const container = el('div', { class: 'app-groups' });
+    for (const entry of withUsage) {
+      const total = entry.appUsage.reduce((sum, p) => sum + p.durationMs, 0);
+      container.append(
+        el('div', { class: 'app-group' }, [
+          el('div', { class: 'app-group__head' }, [
+            el('div', { class: 'app-group__titles' }, [
+              el('strong', { class: 'app-group__title', text: entry.session.taskName }),
+              el('span', {
+                class: 'app-group__meta',
+                text: `${formatDateTime(entry.session.startedAt)} · ${
+                  entry.session.durationMs === null ? 'in progress' : formatCompact(entry.session.durationMs)
+                }`,
+              }),
+            ]),
+            el('span', { class: 'app-group__total', text: formatCompact(total) }),
+          ]),
+          this.appTable(entry.appSummaries, { showTasks: false }),
+          this.periodList(entry.appUsage),
+        ]),
+      );
+    }
+    return container;
+  }
+
+  private renderAppsByApplication(data: DebugData): HTMLElement {
+    return el('div', { class: 'app-groups' }, [
+      el('div', { class: 'app-group' }, [this.appTable(data.appUsageByApp, { showTasks: true })]),
+    ]);
+  }
+
+  /** Name, total time, session count and first/last use for a set of apps. */
+  private appTable(apps: AppUsageSummary[], options: { showTasks: boolean }): HTMLElement {
+    if (apps.length === 0) {
+      return el('p', { class: 'app-table__empty', text: 'No application usage recorded here.' });
+    }
+    const max = Math.max(...apps.map((a) => a.totalMs), 1);
+
+    const rows = apps.map((app) =>
+      el('li', { class: 'app-row' }, [
+        el('div', { class: 'app-row__main' }, [
+          el('span', { class: 'app-row__name', text: app.appName, title: app.appId ?? app.appName }),
+          app.appId ? el('span', { class: 'app-row__id', text: app.appId }) : null,
+        ]),
+        el('div', { class: 'app-row__bar', 'aria-hidden': 'true' }, [
+          el('span', { class: 'app-row__fill', style: `width:${Math.round((app.totalMs / max) * 100)}%` }),
+        ]),
+        el('div', { class: 'app-row__meta' }, [
+          el('span', { class: 'app-row__total', text: formatCompact(app.totalMs) }),
+          el('span', {
+            class: 'app-row__count',
+            text: `${app.periodCount} session${app.periodCount === 1 ? '' : 's'}`,
+          }),
+          el('span', {
+            class: 'app-row__span',
+            text: `${formatTime(app.firstStartedAt)} → ${formatTime(app.lastEndedAt)}`,
+          }),
+          options.showTasks && app.taskNames.length > 0
+            ? el('span', { class: 'app-row__tasks', text: app.taskNames.join(', '), title: app.taskNames.join(', ') })
+            : null,
+        ]),
+      ]),
+    );
+    return el('ul', { class: 'app-table' }, rows);
+  }
+
+  /** The individual periods behind a session's totals. */
+  private periodList(periods: AppUsagePeriod[]): HTMLElement {
+    const ordered = [...periods].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    return el('details', { class: 'periods' }, [
+      el('summary', { class: 'periods__summary', text: `${ordered.length} usage period${ordered.length === 1 ? '' : 's'}` }),
+      el(
+        'ul',
+        { class: 'periods__list' },
+        ordered.map((period) =>
+          el('li', { class: 'period' }, [
+            el('span', { class: 'period__app', text: period.appName }),
+            el('span', {
+              class: 'period__time',
+              text: `${formatTime(period.startedAt)} → ${formatTime(period.endedAt)}`,
+            }),
+            el('span', { class: 'period__duration', text: formatCompact(period.durationMs) }),
+            el('span', { class: 'period__task', text: period.taskName }),
+          ]),
+        ),
+      ),
+    ]);
+  }
+
   private renderDiagnostics(snapshot: AppSnapshot | null): HTMLElement {
     if (!snapshot) return emptyState('No diagnostics', 'State has not loaded yet.');
     const { diagnostics, settings } = snapshot;
@@ -268,6 +448,9 @@ export class DebugPanel {
         ),
         this.toggleRow('Track opened links', settings.linkTrackingEnabled, (value) =>
           void window.timeTracker.updateSettings({ linkTrackingEnabled: value }),
+        ),
+        this.toggleRow('Track application usage', settings.appUsageEnabled, (value) =>
+          void window.timeTracker.updateSettings({ appUsageEnabled: value }),
         ),
         this.toggleRow('Screenshot notifications', settings.notificationsEnabled, (value) =>
           void window.timeTracker.updateSettings({ notificationsEnabled: value }),
@@ -296,11 +479,37 @@ export class DebugPanel {
       ]),
 
       el('div', { class: 'diag-group' }, [
+        el('h3', { class: 'diag-group__title', text: 'Application detection' }),
+        ...diagnostics.appUsageSources.map((source) =>
+          this.diagRow(source.label, source.available ? 'active' : 'unavailable', source.detail, source.available),
+        ),
+        this.currentAppRow(),
+      ]),
+
+      el('div', { class: 'diag-group' }, [
         el('h3', { class: 'diag-group__title', text: 'Storage' }),
         this.diagRow('Platform', diagnostics.platform, '', true),
         this.diagRow('Data directory', '', diagnostics.dataDirectory, true),
         this.diagRow('Screenshots', '', diagnostics.screenshotsDirectory, true),
       ]),
+    ]);
+  }
+
+  /** Live read of the foreground app, so the detector can be checked on demand. */
+  private currentAppRow(): HTMLElement {
+    const value = el('span', { class: 'diag__detail', text: 'Not checked yet.' });
+    const button = el('button', { class: 'btn', type: 'button', text: 'Detect now' });
+    button.addEventListener('click', () => {
+      value.textContent = 'Detecting…';
+      void window.timeTracker.getCurrentApplication().then((app) => {
+        value.textContent = app
+          ? `${app.name}${app.appId ? ` (${app.appId})` : ''}`
+          : 'No foreground application was detected.';
+      });
+    });
+    return el('div', { class: 'diag diag--manual' }, [
+      el('span', { class: 'diag__label', text: 'Foreground app' }),
+      el('div', { class: 'diag__inline' }, [value, button]),
     ]);
   }
 
