@@ -9,10 +9,8 @@
 import { deflateSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 
-/** A real, valid 8x5 PNG so file writes and reads are genuinely exercised. */
-function tinyPng(): Buffer {
-  const width = 8;
-  const height = 5;
+/** A real, valid PNG of the requested size, so file writes are genuinely exercised. */
+function tinyPng(width = 8, height = 5): Buffer {
   const raw = Buffer.alloc(height * (width * 4 + 1));
   for (let y = 0; y < height; y += 1) {
     const row = y * (width * 4 + 1);
@@ -56,7 +54,23 @@ function tinyPng(): Buffer {
   ]);
 }
 
-const PNG = tinyPng();
+/**
+ * Three monitors with deliberately awkward geometry: a landscape primary, a
+ * half-size 2x Retina panel below it, and a portrait display rotated 90 degrees
+ * sitting at a negative x offset. This is what makes the multi-monitor capture
+ * path testable without physical hardware.
+ */
+const DISPLAYS = [
+  { id: 3, label: 'Primary 27"', size: { width: 2560, height: 1440 }, scaleFactor: 1, rotation: 0, bounds: { x: 0, y: 0, width: 2560, height: 1440 } },
+  { id: 1, label: 'Built-in Retina Display', size: { width: 1728, height: 1117 }, scaleFactor: 2, rotation: 0, bounds: { x: 0, y: 1443, width: 1728, height: 1117 } },
+  { id: 2, label: 'Portrait 27"', size: { width: 1440, height: 2560 }, scaleFactor: 1, rotation: 90, bounds: { x: -1440, y: 0, width: 1440, height: 2560 } },
+];
+
+/** Scaled to fit a 1920 box while preserving aspect, exactly as Chromium does. */
+function thumbSizeFor(width: number, height: number, box = 1920): { width: number; height: number } {
+  const scale = Math.min(box / width, box / height, 1);
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+}
 
 export const app = {
   getPath: (_name: string) => tmpdir(),
@@ -87,29 +101,51 @@ export class Notification {
   static isSupported(): boolean {
     return true;
   }
-  constructor(_options: unknown) {}
-  on(): this {
+
+  private handlers = new Map<string, ((...args: unknown[]) => void)[]>();
+
+  constructor(readonly options: { title?: string; body?: string }) {}
+
+  on(event: string, handler: (...args: unknown[]) => void): this {
+    const list = this.handlers.get(event) ?? [];
+    list.push(handler);
+    this.handlers.set(event, list);
     return this;
   }
-  show(): void {}
+
+  /** Mirrors the real behaviour: the OS confirms display via a 'show' event. */
+  show(): void {
+    Notification.shown.push({ title: this.options.title ?? '', body: this.options.body ?? '' });
+    for (const handler of this.handlers.get('show') ?? []) handler();
+  }
+
+  /** Test hook: every notification handed to the OS during this process. */
+  static readonly shown: { title: string; body: string }[] = [];
 }
 
 export const desktopCapturer = {
-  getSources: async (_options: unknown) => [
-    {
-      id: 'screen:0',
-      name: 'Stub Screen',
-      thumbnail: {
-        isEmpty: () => false,
-        toPNG: () => PNG,
-        getSize: () => ({ width: 8, height: 5 }),
-      },
-    },
-  ],
+  // Returned in a deliberately different order from `getAllDisplays`, because the
+  // real API does the same: pairing must go through `display_id`, never position.
+  getSources: async (_options: unknown) =>
+    [DISPLAYS[2]!, DISPLAYS[0]!, DISPLAYS[1]!].map((display, i) => {
+      const size = thumbSizeFor(display.size.width, display.size.height);
+      const png = tinyPng(Math.max(2, Math.round(size.width / 100)), Math.max(2, Math.round(size.height / 100)));
+      return {
+        id: `screen:${display.id}:0`,
+        name: `Screen ${i + 1}`,
+        display_id: String(display.id),
+        thumbnail: {
+          isEmpty: () => false,
+          toPNG: () => png,
+          getSize: () => size,
+        },
+      };
+    }),
 };
 
 export const screen = {
-  getPrimaryDisplay: () => ({ size: { width: 1600, height: 1000 }, scaleFactor: 1 }),
+  getPrimaryDisplay: () => DISPLAYS[0],
+  getAllDisplays: () => DISPLAYS,
 };
 
 export const systemPreferences = {

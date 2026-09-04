@@ -14,6 +14,7 @@ import { join } from 'node:path';
 
 import { AppController } from '../src/main/app-controller';
 import { runAppUsageChecks } from './app-usage';
+import { runScreenshotChecks } from './screenshots';
 import { runWindowsLinkChecks } from './windows-links';
 
 let failures = 0;
@@ -230,7 +231,10 @@ export async function runSmoke(): Promise<number> {
   console.log('\n6. Application usage coalescing (scripted detector)');
   await runAppUsageChecks(check);
 
-  console.log('\n7. Windows address-bar link parsing');
+  console.log('\n7. Multi-monitor capture and notifications');
+  await runScreenshotChecks(check);
+
+  console.log('\n8. Windows address-bar link parsing');
   runWindowsLinkChecks(check);
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);

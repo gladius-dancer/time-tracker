@@ -123,6 +123,11 @@ export class Repository {
     this.store.flushSync();
   }
 
+  /** Resolves once no write is in flight. Used before removing files in tests. */
+  settled(): Promise<void> {
+    return this.store.settled();
+  }
+
   // -- tasks ---------------------------------------------------------------
 
   listTasks(): Task[] {
@@ -236,8 +241,20 @@ export class Repository {
   // -- screenshots ---------------------------------------------------------
 
   addScreenshot(record: Screenshot): void {
+    this.addScreenshots([record]);
+  }
+
+  /**
+   * Adds every image from one capture event in a single update.
+   *
+   * Writing them one at a time would let a reader observe a half-finished event --
+   * the Debug Mode grouping would briefly show "1 of 3 monitors" for a capture
+   * that is merely still in progress. One update also means one flush.
+   */
+  addScreenshots(records: Screenshot[]): void {
+    if (records.length === 0) return;
     this.store.update((db) => {
-      db.screenshots.unshift(record);
+      db.screenshots.unshift(...records);
       if (db.screenshots.length > MAX_SCREENSHOT_RECORDS) {
         db.screenshots.length = MAX_SCREENSHOT_RECORDS;
       }

@@ -59,23 +59,64 @@ export interface TrackingSession {
 
 export type ScreenshotStatus = 'captured' | 'failed';
 
+/** Groups the per-monitor images produced by a single capture event. */
+export type CaptureId = string;
+
+/**
+ * One image, from one monitor, from one capture event.
+ *
+ * A capture event produces one of these per connected display, all sharing a
+ * `captureId` and `capturedAt`, so the UI can present "12:35:00 — Screenshot
+ * Captured" with a row per monitor. A monitor that failed is still recorded, with
+ * `status: 'failed'`, so a partial capture is visible rather than silent.
+ */
 export interface Screenshot {
   id: ScreenshotId;
+  /** Shared by every monitor captured in the same event. */
+  captureId: CaptureId;
   sessionId: SessionId;
   taskId: TaskId;
   taskName: string;
   capturedAt: IsoDateString;
+
+  /** OS display identifier, as a string (`Display.id`). */
+  displayId: string;
+  /** 1-based position in the display list; "Monitor 1", "Monitor 2"… */
+  displayIndex: number;
+  /** The monitor's own name where the OS provides one. */
+  displayName: string;
+  isPrimary: boolean;
+  /** Native geometry of the monitor, before the stored image was scaled down. */
+  displayWidth: number | null;
+  displayHeight: number | null;
+  scaleFactor: number | null;
+  rotation: number | null;
+
   /** File name inside the screenshots directory. Absent when status is 'failed'. */
   fileName: string | null;
   /** Absolute path on disk. Absent when status is 'failed'. */
   filePath: string | null;
+  /** Stored image size, which may be smaller than the monitor's native size. */
   width: number | null;
   height: number | null;
   sizeBytes: number | null;
-  displayLabel: string | null;
+
   status: ScreenshotStatus;
   /** Human readable reason when status is 'failed'. */
   error: string | null;
+}
+
+/** Every monitor from one capture event, for display in Debug Mode. */
+export interface ScreenshotEvent {
+  captureId: CaptureId;
+  capturedAt: IsoDateString;
+  sessionId: SessionId;
+  taskId: TaskId;
+  taskName: string;
+  /** Ordered by monitor index. */
+  screenshots: Screenshot[];
+  captured: number;
+  failed: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +232,23 @@ export type CaptureState =
 
 export type PermissionState = 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
 
+/** What the app can observe about notification delivery. */
+export interface NotificationDiagnostics {
+  supported: boolean;
+  enabled: boolean;
+  /**
+   * The name the OS files these notifications under -- "Time Tracker" for a
+   * packaged build, "Electron" for a development run. This is the row to look for
+   * in System Settings, and the two are not the same entry.
+   */
+  identity: string;
+  /** Notifications the OS confirmed it displayed. */
+  delivered: number;
+  failed: number;
+  lastDeliveredAt: IsoDateString | null;
+  lastError: string | null;
+}
+
 export interface Diagnostics {
   screenPermission: PermissionState;
   /** Per-source availability for link tracking on this OS. */
@@ -198,9 +256,27 @@ export interface Diagnostics {
   /** Per-source availability for foreground-application detection on this OS. */
   appUsageSources: SourceStatus[];
   /** `process.platform` value, e.g. 'darwin' | 'win32' | 'linux'. */
+  notifications: NotificationDiagnostics;
+  /** One entry per connected monitor, so the capture target set is visible. */
+  displays: DisplaySummary[];
   platform: string;
   dataDirectory: string;
   screenshotsDirectory: string;
+}
+
+/** A connected monitor, as the capture service sees it. */
+export interface DisplaySummary {
+  id: string;
+  index: number;
+  name: string;
+  isPrimary: boolean;
+  width: number;
+  height: number;
+  scaleFactor: number;
+  rotation: number;
+  /** Position of the monitor in the virtual desktop, which may be negative. */
+  x: number;
+  y: number;
 }
 
 /** Availability of one OS-specific detection strategy, shown in Diagnostics. */
@@ -230,6 +306,8 @@ export interface AppSnapshot {
 export interface SessionActivity {
   session: TrackingSession;
   screenshots: Screenshot[];
+  /** The same screenshots, grouped by capture event, newest first. */
+  screenshotEvents: ScreenshotEvent[];
   links: OpenedLink[];
   appUsage: AppUsagePeriod[];
   /** Per-application totals within this session. */

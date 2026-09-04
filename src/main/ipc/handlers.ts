@@ -83,4 +83,6 @@ export function registerIpcHandlers(controller: AppController): void {
     const taskId = asTaskId(id);
     return taskId ? controller.getUsageForTask(taskId) : [];
   });
+
+  ipcMain.handle(IpcChannel.SendTestNotification, () => controller.sendTestNotification());
 }

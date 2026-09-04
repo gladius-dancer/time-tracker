@@ -11,9 +11,11 @@ import type {
   CaptureState,
   DebugData,
   Diagnostics,
+  NotificationDiagnostics,
   OpenedLink,
   Screenshot,
   ScreenshotId,
+  ScreenshotEvent,
   SessionActivity,
   SessionId,
   Settings,
@@ -59,17 +61,33 @@ export class AppController {
         this.capture = { phase: 'capturing', startedAtEpochMs: Date.now() };
         this.broadcastSnapshot();
       },
-      onCaptureSucceeded: (record) => {
-        this.capture = { phase: 'success', at: record.capturedAt, screenshotId: record.id };
-        this.notifications.screenshotCaptured(record);
+      onCaptureFinished: (outcome) => {
+        const anySucceeded = outcome.captured > 0;
+
+        if (anySucceeded) {
+          const first = outcome.screenshots.find((s) => s.status === 'captured');
+          this.capture = { phase: 'success', at: outcome.capturedAt, screenshotId: first?.id ?? '' };
+          // Only a successful capture is announced, and only once for the event.
+          this.notifications.screenshotCaptured({
+            taskName: outcome.taskName,
+            monitorCount: outcome.captured,
+          });
+        } else {
+          const reason = outcome.screenshots.find((s) => s.error)?.error ?? 'Unknown error';
+          this.capture = { phase: 'error', at: outcome.capturedAt, message: reason };
+          this.toast('error', 'Screenshot failed. See Debug Mode for details.');
+        }
+
+        // A partial capture is worth surfacing: the images exist, but not all of them.
+        if (anySucceeded && outcome.failed > 0) {
+          this.toast(
+            'error',
+            `Captured ${outcome.captured} of ${outcome.captured + outcome.failed} monitors. See Debug Mode.`,
+          );
+        }
+
         this.broadcastSnapshot();
         this.broadcast(IpcEvent.ActivityChanged, undefined);
-      },
-      onCaptureFailed: (record) => {
-        this.capture = { phase: 'error', at: record.capturedAt, message: record.error ?? 'Unknown error' };
-        this.broadcastSnapshot();
-        this.broadcast(IpcEvent.ActivityChanged, undefined);
-        this.toast('error', 'Screenshot failed. See Debug Mode for details.');
       },
     });
 
@@ -148,6 +166,8 @@ export class AppController {
   private diagnostics(): Diagnostics {
     return {
       screenPermission: this.screenshots.permissionState(),
+      notifications: this.notifications.diagnostics(),
+      displays: this.screenshots.describeDisplays(),
       linkSources: this.links.sourceStatuses,
       appUsageSources: this.appUsage.sourceStatuses,
       platform: process.platform,
@@ -337,9 +357,11 @@ export class AppController {
 
     const sessions: SessionActivity[] = this.repository.listSessions().map((session) => {
       const periods = byUsage.get(session.id) ?? [];
+      const shots = byScreenshot.get(session.id) ?? [];
       return {
         session,
-        screenshots: byScreenshot.get(session.id) ?? [],
+        screenshots: shots,
+        screenshotEvents: groupCaptureEvents(shots),
         links: byLink.get(session.id) ?? [],
         appUsage: periods,
         appSummaries: summariseApps(periods),
@@ -408,6 +430,11 @@ export class AppController {
     }
   }
 
+  /** Posts a notification immediately so the user can confirm delivery. */
+  sendTestNotification(): NotificationDiagnostics {
+    return this.notifications.sendTest();
+  }
+
   addManualLink(url: string): OpenedLink | null {
     return this.links.record(url, null, 'manual');
   }
@@ -430,6 +457,41 @@ export class AppController {
     }
     this.repository.flushSync();
   }
+}
+
+/**
+ * Groups a session's screenshots by capture event, so the UI can show one heading
+ * per moment in time with a row per monitor underneath. Grouping falls back to the
+ * timestamp for rows written before `captureId` existed.
+ */
+function groupCaptureEvents(screenshots: Screenshot[]): ScreenshotEvent[] {
+  const byEvent = new Map<string, Screenshot[]>();
+  for (const shot of screenshots) {
+    const key = shot.captureId || shot.capturedAt;
+    const bucket = byEvent.get(key) ?? [];
+    bucket.push(shot);
+    byEvent.set(key, bucket);
+  }
+
+  const events: ScreenshotEvent[] = [];
+  for (const [key, shots] of byEvent) {
+    const ordered = [...shots].sort((a, b) => (a.displayIndex ?? 0) - (b.displayIndex ?? 0));
+    const first = ordered[0]!;
+    const captured = ordered.filter((s) => s.status === 'captured').length;
+    events.push({
+      captureId: first.captureId || key,
+      capturedAt: first.capturedAt,
+      sessionId: first.sessionId,
+      taskId: first.taskId,
+      taskName: first.taskName,
+      screenshots: ordered,
+      captured,
+      failed: ordered.length - captured,
+    });
+  }
+
+  // Newest capture first, matching the rest of the debug lists.
+  return events.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
 }
 
 /**

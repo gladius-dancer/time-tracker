@@ -5,6 +5,7 @@ import type {
   DebugData,
   OpenedLink,
   Screenshot,
+  ScreenshotEvent,
   SessionActivity,
 } from '../../shared/types';
 import { clear, el, emptyState } from '../dom';
@@ -136,14 +137,14 @@ export class DebugPanel {
   private renderSessions(): HTMLElement {
     const sessions = this.data?.sessions ?? [];
     const relevant = sessions.filter((entry) =>
-      this.tab === 'screenshots' ? entry.screenshots.length > 0 : entry.links.length > 0,
+      this.tab === 'screenshots' ? entry.screenshotEvents.length > 0 : entry.links.length > 0,
     );
 
     if (relevant.length === 0) {
       return this.tab === 'screenshots'
         ? emptyState(
             'No screenshots yet',
-            'Screenshots are captured once a minute while a task is being tracked.',
+            'Every connected monitor is captured once a minute while a task is being tracked.',
           )
         : emptyState(
             'No links detected yet',
@@ -188,16 +189,43 @@ export class DebugPanel {
       header,
       isOpen
         ? el('div', { class: 'session__body' }, [
-            this.tab === 'screenshots' ? this.renderShots(entry.screenshots) : this.renderLinks(entry.links),
+            this.tab === 'screenshots' ? this.renderCaptureEvents(entry.screenshotEvents) : this.renderLinks(entry.links),
           ])
         : null,
     ]);
   }
 
-  private renderShots(shots: Screenshot[]): HTMLElement {
-    const grid = el('div', { class: 'shots' });
-    for (const shot of shots) grid.append(this.renderShot(shot));
-    return grid;
+  /**
+   * One block per capture event -- "12:35:00 — Screenshot Captured" -- with a tile
+   * per monitor beneath it, so it is obvious that the images belong together.
+   */
+  private renderCaptureEvents(events: ScreenshotEvent[]): HTMLElement {
+    const container = el('div', { class: 'captures' });
+    for (const event of events) {
+      const total = event.captured + event.failed;
+      container.append(
+        el('div', { class: 'capture-event' }, [
+          el('div', { class: 'capture-event__head' }, [
+            el('span', { class: 'capture-event__time', text: formatTime(event.capturedAt) }),
+            el('span', { class: 'capture-event__title', text: 'Screenshot Captured' }),
+            el('span', { class: 'capture-event__task', text: event.taskName }),
+            el('span', {
+              class: `capture-event__count${event.failed > 0 ? ' capture-event__count--partial' : ''}`,
+              text:
+                event.failed > 0
+                  ? `${event.captured}/${total} monitors`
+                  : `${total} monitor${total === 1 ? '' : 's'}`,
+            }),
+          ]),
+          el(
+            'div',
+            { class: 'shots' },
+            event.screenshots.map((shot) => this.renderShot(shot)),
+          ),
+        ]),
+      );
+    }
+    return container;
   }
 
   private renderShot(shot: Screenshot): HTMLElement {
@@ -231,17 +259,27 @@ export class DebugPanel {
       figure.append(frame);
     }
 
+    const native =
+      shot.displayWidth && shot.displayHeight
+        ? `${shot.displayWidth}×${shot.displayHeight}${shot.scaleFactor && shot.scaleFactor !== 1 ? ` @${shot.scaleFactor}x` : ''}`
+        : null;
+
     figure.append(
       el('figcaption', { class: 'shot__caption' }, [
-        el('span', { class: 'shot__task', text: shot.taskName }),
+        el('span', { class: 'shot__monitor' }, [
+          el('span', { class: 'shot__index', text: `Monitor ${shot.displayIndex}` }),
+          shot.isPrimary ? el('span', { class: 'shot__primary', text: 'primary' }) : null,
+        ]),
+        el('span', { class: 'shot__name', text: shot.displayName, title: `Display id ${shot.displayId}` }),
         el('span', { class: 'shot__time', text: formatTime(shot.capturedAt) }),
         el('span', {
           class: 'shot__detail',
           text:
             shot.status === 'captured'
-              ? `${shot.width}×${shot.height} · ${formatBytes(shot.sizeBytes)}`
+              ? `${native ?? ''}${native ? ' → ' : ''}${shot.width}×${shot.height} · ${formatBytes(shot.sizeBytes)}`
               : 'not saved',
         }),
+        el('span', { class: 'shot__task', text: shot.taskName }),
       ]),
     );
     return figure;
@@ -471,6 +509,44 @@ export class DebugPanel {
       ]),
 
       el('div', { class: 'diag-group' }, [
+        el('h3', { class: 'diag-group__title', text: 'Notifications' }),
+        this.diagRow(
+          'Support',
+          diagnostics.notifications.supported ? 'available' : 'unsupported',
+          diagnostics.notifications.supported
+            ? `Raised from the main process, so they work while the window is minimised. The OS files these under “${diagnostics.notifications.identity}” — allow that entry in System Settings › Notifications.`
+            : 'This system reports no notification support.',
+          diagnostics.notifications.supported,
+        ),
+        this.diagRow(
+          'Delivered',
+          `${diagnostics.notifications.delivered} shown`,
+          diagnostics.notifications.failed > 0
+            ? `${diagnostics.notifications.failed} failed. ${diagnostics.notifications.lastError ?? ''}`
+            : diagnostics.notifications.lastDeliveredAt
+              ? `Last delivered at ${formatTime(diagnostics.notifications.lastDeliveredAt)}.`
+              : 'Nothing delivered yet.',
+          diagnostics.notifications.failed === 0,
+        ),
+        this.testNotificationRow(),
+      ]),
+
+      el('div', { class: 'diag-group' }, [
+        el('h3', { class: 'diag-group__title', text: `Displays (${diagnostics.displays.length})` }),
+        ...diagnostics.displays.map((display) =>
+          this.diagRow(
+            `Monitor ${display.index}${display.isPrimary ? ' (primary)' : ''}`,
+            `${display.width}×${display.height}`,
+            `${display.name} · scale ${display.scaleFactor}x · rotation ${display.rotation}° · at (${display.x}, ${display.y}) · id ${display.id}`,
+            true,
+          ),
+        ),
+        diagnostics.displays.length === 0
+          ? this.diagRow('None detected', 'unavailable', 'No displays were reported by the system.', false)
+          : null,
+      ]),
+
+      el('div', { class: 'diag-group' }, [
         el('h3', { class: 'diag-group__title', text: 'Link detection sources' }),
         ...diagnostics.linkSources.map((source) =>
           this.diagRow(source.label, source.available ? 'active' : 'unavailable', source.detail, source.available),
@@ -509,6 +585,25 @@ export class DebugPanel {
     });
     return el('div', { class: 'diag diag--manual' }, [
       el('span', { class: 'diag__label', text: 'Foreground app' }),
+      el('div', { class: 'diag__inline' }, [value, button]),
+    ]);
+  }
+
+  /** Sends a real notification so delivery can be confirmed end to end. */
+  private testNotificationRow(): HTMLElement {
+    const value = el('span', { class: 'diag__detail', text: 'Sends a real notification.' });
+    const button = el('button', { class: 'btn', type: 'button', text: 'Send test' });
+    button.addEventListener('click', () => {
+      value.textContent = 'Sending…';
+      void window.timeTracker.sendTestNotification().then((result) => {
+        value.textContent = result.lastError
+          ? `Failed: ${result.lastError}`
+          : `Handed to the OS (${result.delivered} delivered). If nothing appeared, allow this app under System Settings › Notifications.`;
+        void window.timeTracker.getSnapshot();
+      });
+    });
+    return el('div', { class: 'diag diag--manual' }, [
+      el('span', { class: 'diag__label', text: 'Test delivery' }),
       el('div', { class: 'diag__inline' }, [value, button]),
     ]);
   }

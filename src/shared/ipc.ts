@@ -9,6 +9,7 @@ import type {
   AppSnapshot,
   AppUsagePeriod,
   DebugData,
+  NotificationDiagnostics,
   OpenedLink,
   ScreenshotId,
   SessionId,
@@ -42,6 +43,8 @@ export const IpcChannel = {
   GetCurrentApplication: 'app-usage:current',
   GetUsageForSession: 'app-usage:for-session',
   GetUsageForTask: 'app-usage:for-task',
+  // notifications
+  SendTestNotification: 'notifications:test',
 } as const;
 
 /** Main -> renderer, push events. */
@@ -93,6 +96,9 @@ export interface TimeTrackerApi {
   getCurrentApplication(): Promise<ActiveApplication | null>;
   getUsageForSession(sessionId: SessionId): Promise<AppUsagePeriod[]>;
   getUsageForTask(taskId: TaskId): Promise<AppUsagePeriod[]>;
+
+  /** Posts a notification now and reports what the OS did with it. */
+  sendTestNotification(): Promise<NotificationDiagnostics>;
 
   onSnapshotChanged(cb: (snapshot: AppSnapshot) => void): () => void;
   onTick(cb: (tick: TickPayload) => void): () => void;

@@ -172,7 +172,79 @@ try {
     console.log('        (no foreground app detectable here — detection path skipped)');
   }
 
-  console.log('\n6. Stop and report');
+  console.log('\n6. Multi-monitor capture on real hardware');
+  const displays = await evaluate('const s = await window.timeTracker.getSnapshot(); return s.diagnostics.displays;');
+  console.log(`        ${displays.length} display(s): ${displays.map((d) => `${d.name} ${d.width}x${d.height}@${d.scaleFactor}x${d.rotation ? ` rot${d.rotation}` : ''}`).join(' | ')}`);
+  check('every connected display is enumerated', displays.length >= 1);
+
+  const perm = await evaluate('const s = await window.timeTracker.getSnapshot(); return s.diagnostics.screenPermission;');
+  if (perm === 'granted') {
+    const capture = await evaluate(`
+      await window.timeTracker.updateSettings({ debugMode: true, screenshotIntervalMs: 5000 });
+      const before = (await window.timeTracker.getSnapshot()).diagnostics.notifications.delivered;
+      await new Promise(res => setTimeout(res, 7000));
+      const d = await window.timeTracker.getDebugData();
+      const events = d.sessions.flatMap(x => x.screenshotEvents);
+      const snap = await window.timeTracker.getSnapshot();
+      return {
+        events: events.length,
+        first: events[0] ? {
+          count: events[0].screenshots.length,
+          captured: events[0].captured,
+          failed: events[0].failed,
+          ids: events[0].screenshots.map(s => s.displayId),
+          captureIds: [...new Set(events[0].screenshots.map(s => s.captureId))].length,
+          shapes: events[0].screenshots.map(s => s.displayName + ': ' + s.width + 'x' + s.height),
+          task: events[0].taskName,
+        } : null,
+        notificationsBefore: before,
+        notificationsAfter: snap.diagnostics.notifications.delivered,
+        notificationError: snap.diagnostics.notifications.lastError,
+        elapsedMs: snap.active ? snap.active.elapsedMs : 0,
+      };
+    `);
+    check('a capture event was produced', capture.events >= 1, `${capture.events} event(s)`);
+    check(
+      'one image per connected monitor',
+      capture.first?.count === displays.length,
+      `${capture.first?.count} image(s) for ${displays.length} display(s)`,
+    );
+    check('every monitor captured successfully', capture.first?.failed === 0, `${capture.first?.failed} failed`);
+    check('each image names a distinct display', new Set(capture.first?.ids ?? []).size === displays.length);
+    check('the images share one capture id', capture.first?.captureIds === 1);
+    console.log(`        images: ${capture.first?.shapes.join(' | ')}`);
+
+    check(
+      'a notification was delivered for the capture',
+      capture.notificationsAfter > capture.notificationsBefore,
+      `${capture.notificationsBefore} -> ${capture.notificationsAfter}${capture.notificationError ? ` (${capture.notificationError})` : ''}`,
+    );
+    check('the timer kept running through capture', capture.elapsedMs > 7000, `${capture.elapsedMs}ms`);
+
+    const grouped = await evaluate(`
+      [...document.querySelectorAll('.tab')].find(b => b.textContent === 'Screenshots').click();
+      await new Promise(res => setTimeout(res, 600));
+      return {
+        events: document.querySelectorAll('.capture-event').length,
+        tiles: document.querySelectorAll('.capture-event .shot').length,
+        heading: document.querySelector('.capture-event__title') && document.querySelector('.capture-event__title').textContent,
+        monitors: [...document.querySelectorAll('.shot__index')].slice(0, 6).map(n => n.textContent),
+      };
+    `);
+    check('Debug Mode groups tiles under capture events', grouped.events >= 1, `${grouped.events} group(s)`);
+    check('a group heading reads "Screenshot Captured"', grouped.heading === 'Screenshot Captured');
+    check(
+      'each group shows one tile per monitor',
+      grouped.tiles >= displays.length,
+      `${grouped.tiles} tile(s), monitors: ${grouped.monitors.join(', ')}`,
+    );
+    await evaluate(`await window.timeTracker.updateSettings({ debugMode: false, screenshotIntervalMs: 60000 });`);
+  } else {
+    console.log(`        (screen recording is '${perm}' — capture assertions skipped)`);
+    check('capture is skipped cleanly without permission', true);
+  }
+
+  console.log('\n7. Stop and report');
   const stopped = await evaluate(`
     const r = await window.timeTracker.stopTracking();
     await new Promise(res => setTimeout(res, 300));
@@ -185,7 +257,7 @@ try {
   check('reported time saved on the task', stopped.reportedMs >= 3_000, `${stopped.reportedMs}ms`);
   check('nothing is tracking afterwards', stopped.active === null);
 
-  console.log('\n7. Debug Mode');
+  console.log('\n8. Debug Mode');
   const debugOn = await evaluate(`
     await window.timeTracker.updateSettings({ debugMode: true });
     await new Promise(res => setTimeout(res, 600));

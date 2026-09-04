@@ -392,6 +392,32 @@ button { cursor: pointer; }
 }
 .session__body { padding: 4px 14px 14px; border-top: 1px solid var(--line-soft); }
 
+.captures { display: flex; flex-direction: column; gap: 14px; padding-top: 12px; }
+
+.capture-event {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  padding: 10px 12px 12px;
+}
+.capture-event__head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.capture-event__time { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+.capture-event__title { font-size: 12px; color: var(--text-dim); }
+.capture-event__task {
+  font-size: 11px; color: var(--text-faint);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.capture-event__count {
+  margin-left: auto; padding: 1px 8px; border-radius: 999px;
+  background: var(--bg-raised); color: var(--text-faint);
+  font-family: var(--mono); font-size: 10px;
+}
+.capture-event__count--partial { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
+
 .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; padding-top: 12px; }
 .shot { margin: 0; }
 .shot__frame {
@@ -416,7 +442,18 @@ button { cursor: pointer; }
 }
 .shot__failed-text { font-size: 11px; color: var(--text-dim); }
 .shot__caption { display: flex; flex-direction: column; gap: 1px; padding: 7px 2px 0; }
-.shot__task { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shot__monitor { display: flex; align-items: center; gap: 6px; }
+.shot__index { font-size: 12px; font-weight: 600; }
+.shot__primary {
+  padding: 0 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 9px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+}
+.shot__name {
+  font-size: 11px; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shot__task { font-size: 10px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .shot__time { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
 .shot__detail { font-size: 10px; color: var(--text-faint); }
 

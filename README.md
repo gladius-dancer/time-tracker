@@ -116,16 +116,54 @@ booting into a phantom running state.
 
 ### Screenshots
 
-`desktopCapturer` captures the primary display once per interval (default 60s),
-downscaled to 1920px wide and written as PNG. The scheduler aims at an absolute
+**Every connected monitor is captured on each event**, not just the primary one.
+One enumeration per event pairs each `Display` with its capture source through
+`display_id` — the order `getSources` returns bears no relation to the display
+list, and the source names ("Screen 1") are positional in a way that matches
+neither. Each monitor is handled independently, so one display failing (unplugged
+mid-capture, refused by a driver) still leaves the others recorded.
+
+`thumbnailSize` acts as a bounding box with the aspect ratio preserved inside it,
+so a square 1920 box caps the longest edge of every monitor without distorting
+any — a 2560×1440 panel stores as 1920×1080, a rotated 1440×2560 portrait as
+1080×1920, and a 1728×1117 @2x Retina display as 1920×1241.
+
+All images from one event share a `captureId` and timestamp and are persisted in a
+single write, so no reader ever observes a half-finished capture. Each record
+carries its task, session, timestamp, display id, 1-based monitor index, monitor
+name, primary flag, and the monitor's native geometry and scale factor. The scheduler aims at an absolute
 target time and re-arms *before* the capture runs, so a slow capture never delays
 the next one or the clock. Failures are stored as first-class records with
 `status: 'failed'` and a reason, visible in Debug Mode.
 
 On macOS the app checks Screen Recording permission and reports a clear,
 actionable message when it is missing rather than silently capturing nothing.
-Every successful capture raises a desktop notification naming the task; a
-notification failure never affects tracking.
+
+### Notifications
+
+Raised from the **main** process. A renderer `Notification` depends on the window
+existing and is throttled or dropped while it is hidden — exactly when a background
+time tracker needs to speak up. From main, a minimised or unfocused window makes no
+difference.
+
+One notification per capture event, not per monitor (three screens would otherwise
+mean three banners a minute), and only when at least one monitor succeeded:
+
+```
+Screenshot Captured
+Screenshot captured for task: Design review (3 monitors)
+```
+
+Delivery is *observed* rather than assumed: the `show` and `failed` events are
+counted and surfaced in Debug Mode › Diagnostics, with a **Send test** button that
+posts one on demand. The panel also names the identity the OS files these under —
+`Time Tracker` for a packaged build, `Electron` for a development run — because
+those are two different rows in System Settings › Notifications, and allowing one
+does nothing for the other.
+
+Electron's `Notification` is a native wrapper: if the JS object is collected before
+the OS displays it the notification can be torn down and never appear, so a
+reference is held until `show`/`close`/`failed` arrives.
 
 ### Opened links
 
@@ -188,6 +226,11 @@ Off by default. While off, no screenshot or link UI is rendered and the debug da
 is not even requested. Turning it on reveals a visually distinct section with
 four tabs — Screenshots, Opened Links, Applications Used and Diagnostics — with
 everything grouped by tracking session and labelled with its task and timestamp.
+
+**Screenshots** are grouped by capture event — one heading per moment
+(`12:35:00 — Screenshot Captured`) with a tile per monitor beneath it, each
+labelled with its monitor index, name, native resolution, scale factor and stored
+size, so it is obvious which images belong to the same capture.
 
 **Applications Used** shows each application's name and identifier, total time, how
 many usage periods it accounts for, and its first/last use, under three groupings:

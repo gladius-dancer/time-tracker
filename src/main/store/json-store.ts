@@ -22,6 +22,10 @@ export class JsonStore<T extends object> {
   private writing: Promise<void> = Promise.resolve();
   /** Distinguishes concurrent temp files; see `tempPath`. */
   private writeSequence = 0;
+  /** Monotonic version of the document, bumped on every mutation. */
+  private version = 0;
+  /** Highest version already durably written; guards against stale overwrites. */
+  private writtenVersion = 0;
 
   constructor(
     private readonly filePath: string,
@@ -60,6 +64,7 @@ export class JsonStore<T extends object> {
   /** Apply a mutation and schedule a durable write. */
   update(mutate: (draft: T) => void): void {
     mutate(this.data);
+    this.version += 1;
     this.dirty = true;
     this.scheduleFlush();
   }
@@ -78,9 +83,15 @@ export class JsonStore<T extends object> {
     if (!this.dirty) return this.writing;
     this.dirty = false;
     const payload = JSON.stringify(this.data, null, 2);
-    this.writing = this.writing.then(() => this.writeAtomic(payload)).catch((error) => {
+    const version = this.version;
+    this.writing = this.writing.then(() => this.writeAtomic(payload, version)).catch((error) => {
       console.error('[store] flush failed:', error);
     });
+    return this.writing;
+  }
+
+  /** Resolves once every write started so far has finished. */
+  settled(): Promise<void> {
     return this.writing;
   }
 
@@ -94,7 +105,7 @@ export class JsonStore<T extends object> {
     return `${this.filePath}.${process.pid}.${this.writeSequence}.tmp`;
   }
 
-  private async writeAtomic(payload: string): Promise<void> {
+  private async writeAtomic(payload: string, version: number): Promise<void> {
     const tmp = this.tempPath();
     const handle = await fs.open(tmp, 'w');
     try {
@@ -103,11 +114,19 @@ export class JsonStore<T extends object> {
     } finally {
       await handle.close();
     }
+    // A `flushSync` (or a later async write) may have landed newer data while this
+    // one was in flight. Renaming now would overwrite it with a stale snapshot.
+    if (version <= this.writtenVersion) {
+      await fs.unlink(tmp).catch(() => undefined);
+      return;
+    }
+
     if (existsSync(this.filePath)) {
       await fs.copyFile(this.filePath, `${this.filePath}.bak`).catch(() => undefined);
     }
     try {
       await fs.rename(tmp, this.filePath);
+      this.writtenVersion = version;
     } catch (error) {
       await fs.unlink(tmp).catch(() => undefined);
       throw error;
@@ -126,6 +145,8 @@ export class JsonStore<T extends object> {
       const tmp = this.tempPath();
       writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8');
       renameSync(tmp, this.filePath);
+      // Anything still in flight is now stale and must not rename over this.
+      this.writtenVersion = this.version;
     } catch (error) {
       console.error('[store] flushSync failed:', error);
     }

@@ -6,6 +6,7 @@ import type {
   AppSnapshot,
   AppUsagePeriod,
   DebugData,
+  NotificationDiagnostics,
   OpenedLink,
   ScreenshotId,
   SessionId,
@@ -58,6 +59,9 @@ const api: TimeTrackerApi = {
     ipcRenderer.invoke(IpcChannel.GetUsageForSession, sessionId) as Promise<AppUsagePeriod[]>,
   getUsageForTask: (taskId: TaskId) =>
     ipcRenderer.invoke(IpcChannel.GetUsageForTask, taskId) as Promise<AppUsagePeriod[]>,
+
+  sendTestNotification: () =>
+    ipcRenderer.invoke(IpcChannel.SendTestNotification) as Promise<NotificationDiagnostics>,
 
   onSnapshotChanged: (cb) => subscribe<AppSnapshot>(IpcEvent.SnapshotChanged, cb),
   onTick: (cb) => subscribe<TickPayload>(IpcEvent.Tick, cb),
