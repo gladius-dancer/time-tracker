@@ -255,6 +255,48 @@ and for AppleScript are already in `build/entitlements.mac.plist`.
 
 ## Troubleshooting
 
+### Windows: opened links are not detected
+
+Run the detector's own query to see what it sees:
+
+```bash
+npm run diagnose:windows
+```
+
+```
+powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\windows-link-diagnostic.ps1
+```
+
+It prints the same line protocol the app parses:
+
+| Line | Meaning |
+| --- | --- |
+| `##URL <value> <title>` | An address bar was read — this becomes a link |
+| `##NOURL <title>` | A browser window exists but exposed no readable address bar |
+| `##NOBROWSERS` | No supported browser window is open |
+| `##ERR` / `##WINERR` | UI Automation itself failed |
+
+Notes on what each outcome means:
+
+* **`##URL` lines appear but no links are recorded** — this was the original bug.
+  Chrome and Edge show `github.com/user/repo` with the scheme hidden, and the URL
+  parser required `https://`, so every address bar was discarded. Address-bar
+  sources now accept scheme-less values (the clipboard still does not, to avoid
+  treating every copied filename as a link).
+* **`##NOURL` for Firefox** — Firefox only exposes its URL bar over UI Automation
+  once accessibility is active. Nothing to configure; Chromium browsers work.
+* **`##NOBROWSERS`** — the browser's process name is not in the list. The script
+  covers chrome, msedge, firefox, brave, opera, vivaldi, arc, librewolf, waterfox
+  and chromium.
+* **Nothing at all / a timeout** — UI Automation can be slow on a browser with many
+  tabs. The query budget is 15s and a single slow poll no longer disables detection
+  for the session; it takes five consecutive failures.
+
+Whatever the outcome, Debug Mode › Diagnostics reports it in the
+**Link detection sources** row rather than claiming the source is fine.
+
+
+
 ### macOS: "Electron.app was not opened because it contains malware"
 
 Apple has **revoked the notarisation** of some older Electron builds — Electron
