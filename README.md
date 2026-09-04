@@ -59,7 +59,7 @@ src/
     services/
       time-tracker.ts    the authoritative clock
       screenshot.ts      scheduling, capture, permission handling
-      notifications.ts   desktop notifications
+      notifications.ts   the app's single desktop notification (capture)
       exec.ts            timeout-guarded helper for shelling out to OS tools
       link-tracker/      pluggable per-OS URL detection
       app-usage/         ApplicationUsageTracker + per-OS foreground detectors
@@ -96,7 +96,9 @@ Request/response (`ipcRenderer.invoke`):
 | `readScreenshotDataUrl(id)` / `revealScreenshot(id)` | Debug Mode image access |
 | `openLinkExternally(url)` / `addManualLink(url)` | Debug Mode link actions |
 
-Push events (main → renderer): `SnapshotChanged`, `Tick`, `ActivityChanged`, `Toast`.
+Push events (main → renderer): `SnapshotChanged`, `Tick`, `ActivityChanged`. All
+three carry state; none carries a message, because the UI has no in-app message
+layer to render one.
 
 ---
 
@@ -141,18 +143,30 @@ actionable message when it is missing rather than silently capturing nothing.
 
 ### Notifications
 
-Raised from the **main** process. A renderer `Notification` depends on the window
-existing and is throttled or dropped while it is hidden — exactly when a background
-time tracker needs to speak up. From main, a minimised or unfocused window makes no
-difference.
+**The app has exactly one notification, and it is a desktop notification for a
+captured screenshot.** There is no in-app message layer at all — no toasts, no
+banners, no inline alerts. Starting and stopping a timer, a refused action, a
+failed capture: all silent in the window. State changes are visible because the UI
+re-renders from the snapshot, not because something announces them.
 
-One notification per capture event, not per monitor (three screens would otherwise
-mean three banners a minute), and only when at least one monitor succeeded:
+The one notification is raised from the **main** process. A renderer
+`Notification` depends on the window existing and is throttled or dropped while it
+is hidden — exactly when a background time tracker needs to speak up. From main, a
+minimised or unfocused window makes no difference.
+
+One notification per capture *event*, not per monitor (three screens would
+otherwise mean three banners a minute), and only when at least one monitor
+succeeded:
 
 ```
 Screenshot Captured
 Screenshot captured for task: Design review (3 monitors)
 ```
+
+A capture that fails entirely stays quiet; the failure is stored as a record with
+its reason and shown in Debug Mode › Screenshots. Debug Mode › Diagnostics ›
+Capture settings has a **Screenshot notifications** switch that silences it
+without affecting capture.
 
 Delivery is *observed* rather than assumed: the `show` and `failed` events are
 counted and surfaced in Debug Mode › Diagnostics, with a **Send test** button that

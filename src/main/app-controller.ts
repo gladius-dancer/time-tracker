@@ -1,7 +1,7 @@
 import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron';
 import { join } from 'node:path';
 
-import { IpcEvent, type TickPayload, type ToastPayload } from '../shared/ipc';
+import { IpcEvent, type TickPayload } from '../shared/ipc';
 import type {
   ActiveApplication,
   ActiveTracking,
@@ -67,7 +67,9 @@ export class AppController {
         if (anySucceeded) {
           const first = outcome.screenshots.find((s) => s.status === 'captured');
           this.capture = { phase: 'success', at: outcome.capturedAt, screenshotId: first?.id ?? '' };
-          // Only a successful capture is announced, and only once for the event.
+          // The one notification the app raises. Once per capture event, not once
+          // per monitor, and only when at least one monitor actually produced an
+          // image -- a failed capture stays silent and is reported in Debug Mode.
           this.notifications.screenshotCaptured({
             taskName: outcome.taskName,
             monitorCount: outcome.captured,
@@ -75,15 +77,6 @@ export class AppController {
         } else {
           const reason = outcome.screenshots.find((s) => s.error)?.error ?? 'Unknown error';
           this.capture = { phase: 'error', at: outcome.capturedAt, message: reason };
-          this.toast('error', 'Screenshot failed. See Debug Mode for details.');
-        }
-
-        // A partial capture is worth surfacing: the images exist, but not all of them.
-        if (anySucceeded && outcome.failed > 0) {
-          this.toast(
-            'error',
-            `Captured ${outcome.captured} of ${outcome.captured + outcome.failed} monitors. See Debug Mode.`,
-          );
         }
 
         this.broadcastSnapshot();
@@ -120,10 +113,6 @@ export class AppController {
 
   private broadcastSnapshot(): void {
     this.broadcast(IpcEvent.SnapshotChanged, this.snapshot());
-  }
-
-  private toast(kind: ToastPayload['kind'], message: string): void {
-    this.broadcast(IpcEvent.Toast, { kind, message } satisfies ToastPayload);
   }
 
   private onTick(active: ActiveTracking): void {
@@ -196,8 +185,9 @@ export class AppController {
   }
 
   async deleteTask(id: TaskId): Promise<AppSnapshot> {
+    // Refused while the task is being timed. The renderer sees the unchanged
+    // snapshot come back, so the task simply stays put.
     if (this.tracker.activeTaskId === id) {
-      this.toast('error', 'Stop tracking before deleting this task.');
       return this.snapshot();
     }
     await this.repository.deleteTask(id);
@@ -210,7 +200,6 @@ export class AppController {
     // Selection is locked to the tracked task while a session runs, so the
     // right-hand panel can never describe a task other than the one being timed.
     if (this.tracker.isTracking && id !== this.tracker.activeTaskId) {
-      this.toast('error', 'Stop the current timer before switching tasks.');
       return this.snapshot();
     }
     this.repository.setSelectedTaskId(id);
@@ -251,7 +240,6 @@ export class AppController {
     }
 
     this.broadcastSnapshot();
-    this.toast('success', `Tracking started for “${task.name}”.`);
     return { ok: true, message: 'Tracking started.', active: this.tracker.snapshot() };
   }
 
@@ -280,7 +268,6 @@ export class AppController {
     if (!result) {
       return { ok: false, message: 'Nothing is being tracked.', session: null, task: null };
     }
-    this.toast('success', `Saved ${formatDuration(result.session.durationMs ?? 0)} to “${result.session.taskName}”.`);
     return {
       ok: true,
       message: 'Tracking stopped.',
@@ -526,14 +513,4 @@ function summariseApps(periods: AppUsagePeriod[]): AppUsageSummary[] {
   }
 
   return [...byApp.values()].sort((a, b) => b.totalMs - a.totalMs);
-}
-
-function formatDuration(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
 }

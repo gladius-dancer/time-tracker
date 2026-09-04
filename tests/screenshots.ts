@@ -1,5 +1,5 @@
 /**
- * Deterministic checks for multi-monitor capture and capture notifications.
+ * Deterministic checks for multi-monitor capture and its single notification.
  *
  * The Electron stub simulates three monitors with mixed resolutions, a 2x Retina
  * scale factor, a rotated portrait panel and a negative x offset, and returns its
@@ -13,11 +13,12 @@ import { join } from 'node:path';
 // Imported directly rather than via 'electron': the build aliases that specifier
 // to this same module, so the controller and these checks share one instance --
 // and only the stub exposes the `shown` test hook.
-import { Notification, screen } from './electron-stub';
+import { BrowserWindow, Notification, screen } from './electron-stub';
 
 import { readFileSync } from 'node:fs';
 
 import { AppController } from '../src/main/app-controller';
+import { IpcEvent } from '../src/shared/ipc';
 import {
   WINDOWS_APP_USER_MODEL_ID,
   windowsAppUserModelId,
@@ -75,6 +76,9 @@ export async function runScreenshotChecks(check: Check): Promise<void> {
 
   const before = Notification.shown.length;
   const start = await controller.startTracking(task.id);
+  // Baseline taken once tracking is under way, so every channel recorded from here
+  // on was broadcast by capture and nothing else.
+  const sentBefore = BrowserWindow.sent.length;
   await sleep(6_500);
 
   const debug = controller.getDebugData();
@@ -136,7 +140,7 @@ export async function runScreenshotChecks(check: Check): Promise<void> {
   const existence = await Promise.all(paths.map((path) => fs.access(path).then(() => true, () => false)));
   check('every file exists on disk', existence.every(Boolean));
 
-  // -- notifications --------------------------------------------------------
+  // -- the one notification -------------------------------------------------
   const posted = Notification.shown.slice(before);
   check('one notification per capture event, not per monitor', posted.length === 1, `${posted.length} posted`);
   check('the notification title matches the specification', posted[0]?.title === 'Screenshot Captured');
@@ -146,6 +150,15 @@ export async function runScreenshotChecks(check: Check): Promise<void> {
     posted[0]?.body ?? '',
   );
   check('the notification reports the monitor count', posted[0]?.body.includes('3 monitors') === true);
+
+  // Nothing else speaks. There is no in-app toast layer left, so a capture must
+  // produce no renderer-facing message of any kind beyond the state broadcasts.
+  const channels = new Set(BrowserWindow.sent.slice(sentBefore).map((m) => m.channel));
+  check(
+    'a capture broadcasts only state, never user-facing messages',
+    [...channels].every((c) => c === IpcEvent.SnapshotChanged || c === IpcEvent.Tick || c === IpcEvent.ActivityChanged),
+    [...channels].join(', '),
+  );
 
   const notifications = controller.snapshot().diagnostics.notifications;
   check('delivery is observed, not assumed', notifications.delivered >= 1, `${notifications.delivered} delivered`);
@@ -177,12 +190,43 @@ export async function runScreenshotChecks(check: Check): Promise<void> {
     `electron-builder appId=${appId ?? 'not found'} vs ${WINDOWS_APP_USER_MODEL_ID}`,
   );
 
-  // Disabling notifications must not stop capture.
-  controller.updateSettings({ notificationsEnabled: false });
+  // Switching notifications off must silence the announcement without touching
+  // capture itself.
   const beforeDisabled = Notification.shown.length;
+  controller.updateSettings({ notificationsEnabled: false });
   await sleep(5_500);
-  check('capture continues with notifications switched off', controller.getDebugData().sessions.flatMap((s) => s.screenshotEvents).length > events.length);
+  const afterDisabled = controller.getDebugData().sessions.flatMap((s) => s.screenshotEvents);
+  check(
+    'capture continues on its interval with notifications switched off',
+    afterDisabled.length > events.length,
+    `${events.length} -> ${afterDisabled.length} event(s)`,
+  );
   check('no notification is posted while disabled', Notification.shown.length === beforeDisabled);
+
+  // ...and switching them back on resumes exactly one per capture event.
+  controller.updateSettings({ notificationsEnabled: true });
+  await sleep(5_500);
+  const afterEnabled = controller.getDebugData().sessions.flatMap((s) => s.screenshotEvents);
+  const newEvents = afterEnabled.length - afterDisabled.length;
+  check(
+    'capture continues on its interval with notifications switched on',
+    newEvents > 0,
+    `${afterDisabled.length} -> ${afterEnabled.length} event(s)`,
+  );
+  check(
+    'exactly one notification per capture event once re-enabled',
+    Notification.shown.length - beforeDisabled === newEvents,
+    `${Notification.shown.length - beforeDisabled} posted for ${newEvents} event(s)`,
+  );
+
+  // The interval itself is honoured, not merely "more than before".
+  const times = afterEnabled.map((e) => Date.parse(e.capturedAt)).sort((a, b) => a - b);
+  const spacing = times.slice(1).map((t, i) => t - times[i]!);
+  check(
+    'captures are spaced at the configured interval',
+    spacing.every((ms) => Math.abs(ms - 5_000) < 1_500),
+    spacing.join(', '),
+  );
 
   // The timer must be unaffected by all of the above.
   const elapsed = controller.snapshot().active?.elapsedMs ?? 0;

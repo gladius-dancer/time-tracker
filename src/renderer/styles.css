@@ -591,35 +591,6 @@ button { cursor: pointer; }
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 
-/* --------------------------------------------------------------- toasts */
-
-.toasts {
-  position: fixed; right: 20px; bottom: 20px; z-index: 50;
-  display: flex; flex-direction: column-reverse; gap: 8px;
-  pointer-events: none;
-}
-.toast {
-  display: flex; align-items: center; gap: 10px;
-  padding: 11px 16px;
-  border-radius: var(--radius);
-  background: var(--bg-raised);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  font-size: 13px;
-  animation: toast-in 0.2s ease-out;
-  transition: opacity 0.35s, transform 0.35s;
-}
-.toast--out { opacity: 0; transform: translateY(6px); }
-.toast__icon {
-  display: grid; place-items: center; flex: none;
-  width: 19px; height: 19px; border-radius: 50%;
-  background: var(--bg-sunken); font-size: 11px; font-weight: 700;
-}
-.toast--success .toast__icon { background: var(--live-soft); color: var(--live); }
-.toast--error .toast__icon { background: var(--danger-soft); color: var(--danger); }
-.toast--error { border-color: rgba(248, 113, 113, 0.35); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-
 /* ----------------------------------------------------------- responsive */
 
 @media (max-width: 980px) {

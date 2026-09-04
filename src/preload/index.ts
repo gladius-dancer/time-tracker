@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
-import { IpcChannel, IpcEvent, type TimeTrackerApi, type TickPayload, type ToastPayload } from '../shared/ipc';
+import { IpcChannel, IpcEvent, type TimeTrackerApi, type TickPayload } from '../shared/ipc';
 import type {
   ActiveApplication,
   AppSnapshot,
@@ -66,7 +66,6 @@ const api: TimeTrackerApi = {
   onSnapshotChanged: (cb) => subscribe<AppSnapshot>(IpcEvent.SnapshotChanged, cb),
   onTick: (cb) => subscribe<TickPayload>(IpcEvent.Tick, cb),
   onActivityChanged: (cb) => subscribe<void>(IpcEvent.ActivityChanged, () => cb()),
-  onToast: (cb) => subscribe<ToastPayload>(IpcEvent.Toast, cb),
 };
 
 contextBridge.exposeInMainWorld('timeTracker', api);

@@ -204,6 +204,7 @@ export interface Settings {
   screenshotsEnabled: boolean;
   linkTrackingEnabled: boolean;
   appUsageEnabled: boolean;
+  /** Gates the capture notification, the only one the app raises on its own. */
   notificationsEnabled: boolean;
 }
 

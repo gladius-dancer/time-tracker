@@ -83,8 +83,24 @@ export const app = {
   exit: (code?: number) => process.exit(code ?? 0),
 };
 
+/**
+ * One fake window, so everything the main process broadcasts to the renderer --
+ * snapshots, ticks and toasts -- is observable. Without a window the controller's
+ * broadcast loop has nothing to iterate and a stray toast would go unnoticed.
+ */
+const fakeWindow = {
+  isDestroyed: () => false,
+  webContents: {
+    send: (channel: string, payload: unknown) => {
+      BrowserWindow.sent.push({ channel, payload });
+    },
+  },
+};
+
 export const BrowserWindow = {
-  getAllWindows: () => [] as unknown[],
+  getAllWindows: () => [fakeWindow] as unknown[],
+  /** Test hook: every channel the main process broadcast during this process. */
+  sent: [] as { channel: string; payload: unknown }[],
 };
 
 export const powerSaveBlocker = {

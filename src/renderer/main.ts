@@ -1,6 +1,6 @@
 import { DebugPanel } from './components/debug-panel';
 import { TaskList } from './components/task-list';
-import { Toasts } from './components/toasts';
+
 import { TrackerPanel } from './components/tracker-panel';
 import { mustGet } from './dom';
 import { Store } from './store';
@@ -15,7 +15,6 @@ import { Store } from './store';
 async function bootstrap(): Promise<void> {
   const api = window.timeTracker;
   const store = new Store();
-  const toasts = new Toasts(mustGet('toasts'));
 
   new TaskList(mustGet('task-list'), mustGet('task-count'), store, {
     onSelect: (taskId) => void api.selectTask(taskId),
@@ -71,7 +70,6 @@ async function bootstrap(): Promise<void> {
 
   api.onSnapshotChanged((snapshot) => store.setSnapshot(snapshot));
   api.onTick((tick) => store.applyTick(tick));
-  api.onToast((toast) => toasts.show(toast));
 
   store.setSnapshot(await api.getSnapshot());
 }

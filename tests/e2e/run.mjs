@@ -27,10 +27,15 @@ function check(label, ok, detail = '') {
 
 // An isolated profile so the test never touches the user's real tracking data.
 const userDataDir = mkdtempSync(join(tmpdir(), 'time-tracker-e2e-'));
-const electron = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+// The `electron` package exports the path to its own binary. Resolving it beats
+// shelling out to `npx`: Node 22 on Windows refuses to `spawn` a `.cmd` without a
+// shell, and going through the binary skips a resolution step that can pick a
+// different Electron than the one this project installed.
+const { createRequire } = await import('node:module');
+const electron = createRequire(import.meta.url)('electron');
 const child = spawn(
   electron,
-  ['electron', '.', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userDataDir}`],
+  ['.', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userDataDir}`],
   { stdio: ['ignore', 'pipe', 'pipe'] },
 );
 let appLog = '';
@@ -180,14 +185,15 @@ try {
   const perm = await evaluate('const s = await window.timeTracker.getSnapshot(); return s.diagnostics.screenPermission;');
   if (perm === 'granted') {
     const capture = await evaluate(`
-      await window.timeTracker.updateSettings({ debugMode: true, screenshotIntervalMs: 5000 });
+      await window.timeTracker.updateSettings({ debugMode: true, screenshotIntervalMs: 5000, notificationsEnabled: true });
       const before = (await window.timeTracker.getSnapshot()).diagnostics.notifications.delivered;
-      await new Promise(res => setTimeout(res, 7000));
+      await new Promise(res => setTimeout(res, 12000));
       const d = await window.timeTracker.getDebugData();
       const events = d.sessions.flatMap(x => x.screenshotEvents);
       const snap = await window.timeTracker.getSnapshot();
       return {
         events: events.length,
+        times: events.map(e => Date.parse(e.capturedAt)).sort((a, b) => a - b),
         first: events[0] ? {
           count: events[0].screenshots.length,
           captured: events[0].captured,
@@ -219,7 +225,19 @@ try {
       capture.notificationsAfter > capture.notificationsBefore,
       `${capture.notificationsBefore} -> ${capture.notificationsAfter}${capture.notificationError ? ` (${capture.notificationError})` : ''}`,
     );
-    check('the timer kept running through capture', capture.elapsedMs > 7000, `${capture.elapsedMs}ms`);
+    check(
+      'exactly one notification per capture event, not one per monitor',
+      capture.notificationsAfter - capture.notificationsBefore === capture.events,
+      `${capture.notificationsAfter - capture.notificationsBefore} notification(s) for ${capture.events} event(s) across ${displays.length} display(s)`,
+    );
+
+    const gaps = capture.times.slice(1).map((t, i) => t - capture.times[i]);
+    check(
+      'captures keep repeating at the configured interval',
+      capture.events >= 2 && gaps.every((ms) => Math.abs(ms - 5000) < 1500),
+      `${capture.events} event(s), gaps: ${gaps.join(', ') || 'none'}`,
+    );
+    check('the timer kept running through capture', capture.elapsedMs > 12000, `${capture.elapsedMs}ms`);
 
     const grouped = await evaluate(`
       [...document.querySelectorAll('.tab')].find(b => b.textContent === 'Screenshots').click();

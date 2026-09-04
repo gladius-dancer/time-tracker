@@ -55,16 +55,7 @@ export const IpcEvent = {
   Tick: 'tracking:tick',
   /** Screenshots / links changed; debug UI should refresh. */
   ActivityChanged: 'activity:changed',
-  /** Transient user feedback (toast). */
-  Toast: 'ui:toast',
 } as const;
-
-export type ToastKind = 'info' | 'success' | 'error';
-
-export interface ToastPayload {
-  kind: ToastKind;
-  message: string;
-}
 
 export interface TickPayload {
   sessionId: string;
@@ -103,5 +94,4 @@ export interface TimeTrackerApi {
   onSnapshotChanged(cb: (snapshot: AppSnapshot) => void): () => void;
   onTick(cb: (tick: TickPayload) => void): () => void;
   onActivityChanged(cb: () => void): () => void;
-  onToast(cb: (toast: ToastPayload) => void): () => void;
 }

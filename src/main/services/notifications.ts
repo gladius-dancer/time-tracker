@@ -38,6 +38,10 @@ export interface ScreenshotNotification {
  * hidden, which is exactly when a background time tracker needs to speak up.
  * Posting from main means a minimised or unfocused window makes no difference.
  *
+ * This is the app's only user-facing feedback channel: there is no in-app toast
+ * layer. A completed capture posts exactly one desktop notification -- one per
+ * capture event, never one per monitor.
+ *
  * Nothing here is allowed to affect tracking. Every call is wrapped, delivery is
  * observed rather than assumed, and failures are recorded for the diagnostics
  * panel instead of thrown.

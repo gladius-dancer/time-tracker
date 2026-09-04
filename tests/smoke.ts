@@ -231,7 +231,7 @@ export async function runSmoke(): Promise<number> {
   console.log('\n6. Application usage coalescing (scripted detector)');
   await runAppUsageChecks(check);
 
-  console.log('\n7. Multi-monitor capture and notifications');
+  console.log('\n7. Multi-monitor capture and its one notification');
   await runScreenshotChecks(check);
 
   console.log('\n8. Windows address-bar link parsing');
