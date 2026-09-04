@@ -514,7 +514,13 @@ export class DebugPanel {
           'Support',
           diagnostics.notifications.supported ? 'available' : 'unsupported',
           diagnostics.notifications.supported
-            ? `Raised from the main process, so they work while the window is minimised. The OS files these under “${diagnostics.notifications.identity}” — allow that entry in System Settings › Notifications.`
+            ? `Raised from the main process, so they work while the window is minimised. The OS files these under “${diagnostics.notifications.identity}” — allow that entry in the system notification settings.${
+                diagnostics.platform === 'win32'
+                  ? diagnostics.notifications.appUserModelId
+                    ? ` Toasts route via App User Model ID ${diagnostics.notifications.appUserModelId}, registered by the installer.`
+                    : ' Using Electron’s default App User Model ID, which is correct for an unpackaged run — a custom id with no Start Menu shortcut would make Windows drop every toast silently.'
+                  : ''
+              }`
             : 'This system reports no notification support.',
           diagnostics.notifications.supported,
         ),

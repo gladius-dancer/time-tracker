@@ -242,6 +242,11 @@ export interface NotificationDiagnostics {
    * in System Settings, and the two are not the same entry.
    */
   identity: string;
+  /**
+   * Windows only. The App User Model ID this app adopted, or null when it kept
+   * Electron's default -- which is the correct choice for an unpackaged run.
+   */
+  appUserModelId: string | null;
   /** Notifications the OS confirmed it displayed. */
   delivered: number;
   failed: number;

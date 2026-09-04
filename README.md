@@ -298,6 +298,31 @@ and for AppleScript are already in `build/entitlements.mac.plist`.
 
 ## Troubleshooting
 
+### Windows: no toast when a screenshot is captured
+
+Windows routes a toast by **App User Model ID** to the Start Menu shortcut
+registered under that id. If the app adopts an id with no matching shortcut,
+Windows drops every toast *silently* — no error, no `failed` event, nothing in the
+Action Center.
+
+So the app only adopts the installer's id when it is actually packaged:
+
+| Run | App User Model ID | Why |
+| --- | --- | --- |
+| `npm start` (unpackaged) | Electron's default | No Start Menu shortcut exists yet |
+| Installed build | `com.timetracker.app` | Matches the shortcut NSIS registers |
+
+Debug Mode › Diagnostics › Notifications reports which of the two is in force, and
+the identity the OS files the notifications under — allow **that** entry in
+Windows notification settings. A development run appears as *Electron*, an
+installed build as *Time Tracker*; they are separate entries and allowing one does
+nothing for the other.
+
+`WINDOWS_APP_USER_MODEL_ID` and `appId` in `electron-builder.yml` must stay equal
+or routing breaks; `npm run smoke` asserts they match.
+
+
+
 ### Windows: opened links are not detected
 
 Run the detector's own query to see what it sees:

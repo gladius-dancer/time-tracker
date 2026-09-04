@@ -15,7 +15,13 @@ import { join } from 'node:path';
 // and only the stub exposes the `shown` test hook.
 import { Notification, screen } from './electron-stub';
 
+import { readFileSync } from 'node:fs';
+
 import { AppController } from '../src/main/app-controller';
+import {
+  WINDOWS_APP_USER_MODEL_ID,
+  windowsAppUserModelId,
+} from '../src/main/services/notifications';
 import { displayNameOf, matchSource } from '../src/main/services/screenshot';
 
 type Check = (label: string, ok: boolean, detail?: string) => void;
@@ -145,6 +151,31 @@ export async function runScreenshotChecks(check: Check): Promise<void> {
   check('delivery is observed, not assumed', notifications.delivered >= 1, `${notifications.delivered} delivered`);
   check('no delivery failures were recorded', notifications.failed === 0);
   check('the OS-facing identity is reported', notifications.identity.length > 0, notifications.identity);
+
+  // -- Windows toast routing ------------------------------------------------
+  // A toast is delivered to the Start Menu shortcut registered under the App User
+  // Model ID. Adopting an id with no such shortcut makes Windows drop every toast
+  // silently, which is exactly what a development run would do.
+  check(
+    'a packaged Windows build adopts the installer App User Model ID',
+    windowsAppUserModelId('win32', true) === WINDOWS_APP_USER_MODEL_ID,
+  );
+  check(
+    'an unpackaged Windows run keeps Electron’s default App User Model ID',
+    windowsAppUserModelId('win32', false) === null,
+  );
+  check('macOS never adopts an App User Model ID', windowsAppUserModelId('darwin', true) === null);
+  check('Linux never adopts an App User Model ID', windowsAppUserModelId('linux', true) === null);
+
+  // Drift guard: the id only routes correctly if it matches what the installer
+  // registers, and those live in two different files.
+  const builderConfig = readFileSync('electron-builder.yml', 'utf8');
+  const appId = builderConfig.match(/^appId:\s*(\S+)/m)?.[1];
+  check(
+    'the App User Model ID matches appId in electron-builder.yml',
+    appId === WINDOWS_APP_USER_MODEL_ID,
+    `electron-builder appId=${appId ?? 'not found'} vs ${WINDOWS_APP_USER_MODEL_ID}`,
+  );
 
   // Disabling notifications must not stop capture.
   controller.updateSettings({ notificationsEnabled: false });

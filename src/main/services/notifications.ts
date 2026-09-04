@@ -2,6 +2,28 @@ import { app, Notification } from 'electron';
 
 import type { NotificationDiagnostics } from '../../shared/types';
 
+/**
+ * Must match `appId` in electron-builder.yml. Windows routes a toast by App User
+ * Model ID to the Start Menu shortcut the installer registers under that id.
+ */
+export const WINDOWS_APP_USER_MODEL_ID = 'com.timetracker.app';
+
+/**
+ * The App User Model ID to adopt, or null to leave Electron's default alone.
+ *
+ * This is easy to get backwards. Windows does not need an explicit AUMID -- it
+ * needs a *correct* one. A toast is delivered to the Start Menu shortcut
+ * registered under that id, and if no such shortcut exists Windows drops the toast
+ * silently: no error, no `failed` event, nothing in the Action Center. A packaged
+ * install has the shortcut the NSIS installer created; a development run
+ * (`npm start`) has none, so it must keep Electron's own default, which Windows
+ * still delivers under the "Electron" identity.
+ */
+export function windowsAppUserModelId(platform: string, isPackaged: boolean): string | null {
+  if (platform !== 'win32') return null;
+  return isPackaged ? WINDOWS_APP_USER_MODEL_ID : null;
+}
+
 export interface ScreenshotNotification {
   taskName: string;
   /** How many monitors were captured in this event. */
@@ -32,6 +54,7 @@ export class NotificationService {
    */
   private readonly pending = new Set<Notification>();
 
+  private appUserModelId: string | null = null;
   private delivered = 0;
   private failed = 0;
   private lastDeliveredAt: string | null = null;
@@ -43,14 +66,22 @@ export class NotificationService {
       console.warn('[notifications] not supported on this system; continuing without them');
       this.lastError = 'This system reports no notification support.';
     }
-    // macOS attributes a notification to the app bundle; Windows needs an explicit
-    // App User Model ID or notifications are silently dropped for unpackaged runs.
-    if (process.platform === 'win32') {
+    const aumid = windowsAppUserModelId(process.platform, this.isPackaged());
+    if (aumid) {
       try {
-        app.setAppUserModelId('com.timetracker.app');
+        app.setAppUserModelId(aumid);
+        this.appUserModelId = aumid;
       } catch (error) {
         console.error('[notifications] could not set app user model id:', error);
       }
+    }
+  }
+
+  private isPackaged(): boolean {
+    try {
+      return app.isPackaged;
+    } catch {
+      return false;
     }
   }
 
@@ -72,6 +103,7 @@ export class NotificationService {
       supported: this.supported,
       enabled: this.enabled,
       identity: this.identity(),
+      appUserModelId: this.appUserModelId,
       delivered: this.delivered,
       failed: this.failed,
       lastDeliveredAt: this.lastDeliveredAt,
