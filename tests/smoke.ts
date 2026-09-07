@@ -14,6 +14,7 @@ import { join } from 'node:path';
 
 import { AppController } from '../src/main/app-controller';
 import { runAppUsageChecks } from './app-usage';
+import { runLinuxCaptureChecks } from './linux-capture';
 import { runScreenshotChecks } from './screenshots';
 import { runWindowsLinkChecks } from './windows-links';
 
@@ -30,6 +31,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function runSmoke(): Promise<number> {
+  // These checks describe the Electron capture path against a stub that
+  // simulates three monitors. On a Wayland developer machine the service would
+  // otherwise select the desktop-portal backend and capture the real screen --
+  // one monitor, a live compositor, a consent dialog -- and none of the
+  // assertions below would mean anything. The Wayland path has its own checks in
+  // `linux-capture.ts`, which need no session at all.
+  delete process.env.WAYLAND_DISPLAY;
+  delete process.env.XDG_SESSION_TYPE;
+
   const dataDir = await fs.mkdtemp(join(tmpdir(), 'time-tracker-smoke-'));
   console.log(`\nData directory: ${dataDir}\n`);
 
@@ -236,6 +246,9 @@ export async function runSmoke(): Promise<number> {
 
   console.log('\n8. Windows address-bar link parsing');
   runWindowsLinkChecks(check);
+
+  console.log('\n9. Linux: Wayland portal capture and browser-history links');
+  await runLinuxCaptureChecks(check);
 
   console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
   return failures === 0 ? 0 : 1;

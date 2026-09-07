@@ -41,6 +41,12 @@ if (!gotTheLock) {
 
     createMainWindow();
 
+    // After the window, deliberately: on Wayland this puts the desktop's
+    // screen-sharing dialog in front of an app the user has just opened and is
+    // looking at, instead of springing it on them at the first scheduled
+    // capture. It resolves immediately, showing nothing, once access is granted.
+    void controller.requestCaptureAccess();
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
     });

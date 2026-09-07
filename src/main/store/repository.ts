@@ -58,7 +58,7 @@ export class Repository {
   private readonly store: JsonStore<Database>;
 
   constructor(
-    dataDir: string,
+    readonly dataDir: string,
     readonly screenshotsDir: string,
   ) {
     this.store = new JsonStore<Database>(join(dataDir, 'time-tracker.json'), () => ({

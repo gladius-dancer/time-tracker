@@ -1,4 +1,5 @@
 import { commandExists, run } from '../../exec';
+import { isWaylandSession } from '../../platform';
 import { normaliseUrl } from '../url';
 import type { DetectedLink, LinkTrackingSource, SourceAvailability } from './types';
 
@@ -22,6 +23,15 @@ export class LinuxWindowLinkSource implements LinkTrackingSource {
     if (process.platform !== 'linux') {
       return { available: false, detail: 'Linux only.' };
     }
+    // Checked before the tools: under Wayland neither one can see another
+    // client's windows, so "install wmctrl" would be advice that changes nothing.
+    if (isWaylandSession()) {
+      return {
+        available: false,
+        detail:
+          'Wayland does not expose other apps’ window titles. Links are read from browser history instead.',
+      };
+    }
     this.tool = (await commandExists('wmctrl'))
       ? 'wmctrl'
       : (await commandExists('xdotool'))
@@ -32,13 +42,7 @@ export class LinuxWindowLinkSource implements LinkTrackingSource {
       return {
         available: false,
         detail:
-          'Install wmctrl or xdotool to scan window titles. Clipboard URL detection keeps working without them.',
-      };
-    }
-    if (process.env.WAYLAND_DISPLAY && !process.env.DISPLAY) {
-      return {
-        available: false,
-        detail: 'Wayland does not expose other apps’ window titles. Clipboard URL detection still works.',
+          'Install wmctrl or xdotool to scan window titles. Browser history and clipboard detection keep working without them.',
       };
     }
     return { available: true, detail: `Scanning window titles for URLs via ${this.tool}.` };
@@ -50,6 +54,7 @@ export class LinuxWindowLinkSource implements LinkTrackingSource {
 
   async poll(): Promise<DetectedLink[]> {
     if (process.platform !== 'linux' || !this.tool) return [];
+    if (isWaylandSession()) return [];
 
     const out =
       this.tool === 'wmctrl'

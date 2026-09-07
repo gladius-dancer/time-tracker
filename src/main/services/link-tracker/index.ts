@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { LinkSource, SourceStatus, OpenedLink, TrackingSession } from '../../../shared/types';
 import type { Repository } from '../../store/repository';
+import { BrowserHistoryLinkSource } from './sources/browser-history';
 import { ClipboardLinkSource } from './sources/clipboard';
 import { LinuxWindowLinkSource } from './sources/linux';
 import { MacBrowserLinkSource } from './sources/macos';
@@ -39,7 +40,12 @@ export class LinkTracker {
       new ClipboardLinkSource(),
       ...(process.platform === 'darwin' ? [new MacBrowserLinkSource()] : []),
       ...(process.platform === 'win32' ? [new WindowsBrowserLinkSource()] : []),
-      ...(process.platform === 'linux' ? [new LinuxWindowLinkSource()] : []),
+      // Two Linux sources by design: window titles are the only live signal on
+      // X11, and are unavailable under Wayland, where the history files are.
+      // Both are cheap, both dedupe through `seenUrls`, so both simply run.
+      ...(process.platform === 'linux'
+        ? [new LinuxWindowLinkSource(), new BrowserHistoryLinkSource()]
+        : []),
     ];
   }
 

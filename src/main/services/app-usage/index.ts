@@ -9,6 +9,7 @@ import type {
   TrackingSession,
 } from '../../../shared/types';
 import type { Repository } from '../../store/repository';
+import { GnomeShellActiveApplicationSource } from './sources/gnome-shell';
 import { LinuxActiveApplicationSource } from './sources/linux';
 import { MacActiveApplicationSource } from './sources/macos';
 import type { ActiveApplicationSource } from './sources/types';
@@ -75,7 +76,12 @@ export class ApplicationUsageTracker {
       [
         ...(process.platform === 'darwin' ? [new MacActiveApplicationSource()] : []),
         ...(process.platform === 'win32' ? [new WindowsActiveApplicationSource()] : []),
-        ...(process.platform === 'linux' ? [new LinuxActiveApplicationSource()] : []),
+        // GNOME Shell first: it is the only one that works on Wayland, and where
+        // both work it is also the more accurate of the two. The X11 source stays
+        // as the fallback for desktops with no extension installed.
+        ...(process.platform === 'linux'
+          ? [new GnomeShellActiveApplicationSource(), new LinuxActiveApplicationSource()]
+          : []),
       ];
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.maxSampleGapMs = this.pollIntervalMs * MAX_GAP_INTERVALS;

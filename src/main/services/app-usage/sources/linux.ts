@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 
 import type { ActiveApplication, SourceStatus } from '../../../../shared/types';
 import { commandExists, run } from '../../exec';
+import { isWaylandSession } from '../../platform';
 import type { ActiveApplicationSource } from './types';
 
 /**
@@ -21,12 +22,6 @@ export class LinuxActiveApplicationSource implements ActiveApplicationSource {
   async probe(): Promise<Omit<SourceStatus, 'id' | 'label'>> {
     if (process.platform !== 'linux') return { available: false, detail: 'Linux only.' };
 
-    if (process.env.WAYLAND_DISPLAY && !process.env.DISPLAY) {
-      return {
-        available: false,
-        detail: 'Wayland does not expose other applications’ windows, so the foreground app cannot be read.',
-      };
-    }
     this.tool = (await commandExists('xprop'))
       ? 'xprop'
       : (await commandExists('xdotool'))
@@ -35,11 +30,25 @@ export class LinuxActiveApplicationSource implements ActiveApplicationSource {
     if (!this.tool) {
       return { available: false, detail: 'Install xprop (x11-utils) or xdotool to detect the active window.' };
     }
+
+    // Availability is decided by asking, not by inspecting `WAYLAND_DISPLAY`.
+    // The tools are present and connect happily under XWayland; whether they can
+    // actually see anything depends on what the compositor publishes on the X11
+    // root window, which varies by desktop and by which app happens to be in
+    // front. A session-type guess gets that wrong in both directions -- it hides
+    // a source that works for X11 applications, and on the desktops where the
+    // answer really is "nothing" it claims to be reading a window it never reads.
     const current = await this.detect();
-    return {
-      available: true,
-      detail: `Reading the active window via ${this.tool}${current ? ` (currently ${current.name})` : ''}.`,
-    };
+    if (!current) {
+      return {
+        available: false,
+        detail: isWaylandSession()
+          ? `${this.tool} reports no application for the focused window, which is what Wayland does for its own ` +
+            'windows. Install the Time Tracker GNOME extension to read the foreground application here.'
+          : `${this.tool} reports no active window right now.`,
+      };
+    }
+    return { available: true, detail: `Reading the active window via ${this.tool} (currently ${current.name}).` };
   }
 
   async detect(): Promise<ActiveApplication | null> {

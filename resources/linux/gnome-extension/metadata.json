@@ -1,0 +1,8 @@
+{
+  "uuid": "time-tracker-window-info@timetracker.local",
+  "name": "Time Tracker Window Info",
+  "description": "Publishes the focused window's application and title on the session bus, so Time Tracker can record which application is in use. Wayland gives ordinary applications no way to read this, and GNOME's own Introspect API refuses callers outside its allowlist; a shell extension is the only route. Read-only: it exposes nothing but the focused window, and only on request.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/gladius-dancer/time-tracker",
+  "session-modes": ["user"]
+}

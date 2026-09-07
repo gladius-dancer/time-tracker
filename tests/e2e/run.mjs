@@ -10,7 +10,7 @@
  *   npm run test:e2e
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,6 +27,15 @@ function check(label, ok, detail = '') {
 
 // An isolated profile so the test never touches the user's real tracking data.
 const userDataDir = mkdtempSync(join(tmpdir(), 'time-tracker-e2e-'));
+
+// On Wayland the app captures through the desktop portal, which asks the user to
+// approve screen sharing the first time and then honours a stored token. A fresh
+// profile every run would mean a dialog every run -- an end-to-end test that
+// cannot finish unattended -- so the token alone is carried across runs, outside
+// the profile the test otherwise keeps pristine.
+const CAPTURE_TOKEN_CACHE = join(tmpdir(), 'time-tracker-e2e-capture-token.json');
+const captureToken = join(userDataDir, 'wayland-capture.json');
+if (existsSync(CAPTURE_TOKEN_CACHE)) copyFileSync(CAPTURE_TOKEN_CACHE, captureToken);
 // The `electron` package exports the path to its own binary. Resolving it beats
 // shelling out to `npx`: Node 22 on Windows refuses to `spawn` a `.cmd` without a
 // shell, and going through the binary skips a resolution step that can pick a
@@ -341,6 +350,8 @@ try {
 } finally {
   cdp?.close();
   child.kill();
+  // Keep whatever grant this run obtained, so the next one is unattended.
+  if (existsSync(captureToken)) copyFileSync(captureToken, CAPTURE_TOKEN_CACHE);
 }
 
 console.log(`\n${failures === 0 ? '✅ all end-to-end checks passed' : `❌ ${failures} check(s) failed`}\n`);

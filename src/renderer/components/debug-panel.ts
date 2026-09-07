@@ -499,11 +499,21 @@ export class DebugPanel {
       el('div', { class: 'diag-group' }, [
         el('h3', { class: 'diag-group__title', text: 'Screen capture' }),
         this.diagRow(
+          diagnostics.captureBackend.label,
+          diagnostics.captureBackend.available ? 'ready' : 'unavailable',
+          diagnostics.captureBackend.detail,
+          diagnostics.captureBackend.available,
+        ),
+        this.diagRow(
           'Permission',
           diagnostics.screenPermission,
           permissionOk
             ? 'The system allows screen capture.'
-            : 'Grant Screen Recording permission, then restart the app.',
+            : // Each platform grants this somewhere different, and telling a Linux
+              // user to open System Settings would send them nowhere.
+              diagnostics.captureBackend.id === 'wayland-portal'
+              ? 'The desktop asks to share your screen once, just after the app starts. Approve it and every screenshot after that is silent.'
+              : 'Grant Screen Recording permission, then restart the app.',
           permissionOk,
         ),
       ]),

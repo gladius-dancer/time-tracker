@@ -21,7 +21,8 @@
     "package:win": "npm run build && electron-builder --win --x64 --arm64",
     "package:linux": "npm run build && electron-builder --linux --x64 --arm64",
     "package:all": "npm run build && electron-builder --mac --universal --win --linux",
-    "diagnose:windows": "node scripts/emit-windows-diagnostic.mjs"
+    "diagnose:windows": "node scripts/emit-windows-diagnostic.mjs",
+    "install:gnome-extension": "node scripts/install-gnome-extension.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

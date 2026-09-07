@@ -141,6 +141,34 @@ the next one or the clock. Failures are stored as first-class records with
 On macOS the app checks Screen Recording permission and reports a clear,
 actionable message when it is missing rather than silently capturing nothing.
 
+**On Wayland, capture goes through a different backend.** Wayland hands no client
+the screen contents, so Chromium routes `desktopCapturer` through
+xdg-desktop-portal — and it opens that portal from scratch on every call without
+ever asking the compositor to remember the grant, which puts a "Share Screen"
+picker in front of the user before *each* capture. Unusable for a tracker that
+shoots once a minute.
+
+So on a Wayland session the app opens the same portal itself, with
+`persist_mode=2`. The compositor then returns a `restore_token`, stored as
+`wayland-capture.json` in the data directory: **the picker appears once, at
+startup, and every capture after it is silent.** Consent is requested just after
+the window opens rather than at the first capture, so the dialog arrives while
+the user is looking at the app they just launched instead of interrupting them
+mid-task minutes later; the helper's `--grant-only` mode does that half of the
+portal conversation without pulling any frames. The frames arrive over
+PipeWire, which needs a PipeWire client to consume — hence the small Python
+helper in `resources/linux/`, driving GStreamer through the GObject bindings a
+GNOME or KDE desktop already ships. The helper speaks JSON, so nothing in the
+main process parses prose, and the parsing and monitor-pairing halves are pure
+and covered by `tests/linux-capture.ts`.
+
+The helper writes each monitor at native resolution and the downscale to the 1920
+bounding box happens in the main process, so the stored images match the other
+platforms. A capture costs a few seconds, entirely off the tracking clock. Should
+the compositor reject a stored token — it can, after a monitor change — the token
+is discarded so the user is asked once more rather than every capture failing
+silently from then on.
+
 ### Notifications
 
 **The app has exactly one notification, and it is a desktop notification for a
@@ -190,12 +218,29 @@ Mode diagnostics panel:
 | Clipboard URLs | all | No permission needed. The reliable baseline. |
 | Browser tabs (AppleScript) | macOS | Reads the front tab of running browsers. Needs Automation permission. |
 | Address bar (UI Automation) | Windows | Reads Chromium/Edge/Firefox address bars via PowerShell. |
-| Window titles (X11) | Linux | Needs `wmctrl` or `xdotool`; only works when the URL is in the title. |
+| Window titles (X11) | Linux (X11 only) | Needs `wmctrl` or `xdotool`; only works when the URL is in the title. |
+| Browser history | Linux | Reads the visit log of Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Firefox and Zen, in deb, snap and Flatpak layouts. |
 | `timetracker://link?url=…` | all | Integration hook, e.g. for a browser extension. |
 
 Only browsers that are already running are queried — nothing is ever launched.
 Polling happens **only** while a session is active; outside one, the tracker does
 no work at all. URLs are canonicalised and de-duplicated per session.
+
+**The history source is what makes Linux work.** Window titles are the only live
+signal on X11, and Wayland does not expose them at all — the compositor refuses to
+tell one client about another's windows — which is why link tracking recorded
+nothing there. The history databases survive that: they are local files, they
+carry the real URL and the page title rather than a truncated address bar, and
+they behave identically on X11 and Wayland with nothing to install. They are read
+through `node:sqlite`, which Electron 44 provides, so there is no native module.
+
+The database is copied before each read, together with its write-ahead log,
+because the browser holds the original open and would otherwise refuse the read
+while a write is in flight — and without the `-wal` the copy would be missing
+exactly the recent visits being looked for. Each profile carries a cursor that
+starts at the session's start time, so a years-deep history is never replayed as
+"links you just opened", and a small lookback window absorbs the browser's own
+write lag without recording anything twice.
 
 ### Application usage
 
@@ -233,6 +278,36 @@ open period and leave a gap — the durations are deliberately allowed not to su
 the session length. Tracking stops the instant the session does, not on the next
 poll, and a detector that throws is logged once and then suppressed so a broken
 platform cannot flood the log.
+
+**On Wayland the foreground application needs a GNOME extension.** `xprop` under
+XWayland returns a placeholder window with no `WM_CLASS` and no PID that never
+changes as focus moves, and GNOME's own `org.gnome.Shell.Introspect` answers
+`AccessDenied` to any caller outside its built-in allowlist. Code running inside
+the shell is the only vantage point left, so `resources/linux/gnome-extension`
+publishes one D-Bus method returning the focused window and nothing else — no
+UI, no polling, no state:
+
+```bash
+npm run install:gnome-extension
+```
+
+Then log out and back in; GNOME cannot load a newly installed extension into a
+running Wayland session. Until that happens the source reports itself unavailable
+with the command to run, and the tracker carries on without it.
+
+The window is identified through the shell's own `WindowTracker`, not through
+`WM_CLASS`. `WM_CLASS` is an X11 property, so a Wayland-native window has none at
+all: identifying apps by it detects XWayland clients only, which is why a Java
+IDE like WebStorm was recorded while Files, Terminal and a Wayland Firefox were
+not. `WindowTracker` resolves both kinds to the same `ShellApp` the dash and
+alt-tab use, which is also where the presentable name ("Files") comes from. The
+`WM_CLASS` pair is still sent, as the fallback for a window the shell cannot
+place.
+
+The payload is base64-encoded JSON. `gdbus` prints replies in GVariant syntax,
+quoting and escaping strings, and a window title is arbitrary user text — an
+apostrophe in "Rustem's notes" is enough to defeat a quote-stripping parser.
+Base64 leaves nothing to escape, so the reader extracts it with one match.
 
 ### Debug Mode
 
@@ -292,9 +367,24 @@ document store.
   Electron when running `npm start`; a packaged build prompts under its own name.
 * **Windows** — no special permissions. UI Automation is the same channel screen
   readers use, and the foreground-window API needs no elevation.
-* **Linux** — screenshots need a portal-capable session; window-title scanning and
-  foreground-application detection need `xprop`/`wmctrl`/`xdotool` and do not work
-  under Wayland. Clipboard detection works everywhere.
+* **Linux (X11)** — no permissions. Screenshots go through Electron directly;
+  window-title and foreground-application detection need `xprop`, `wmctrl` or
+  `xdotool`.
+* **Linux (Wayland)** — screen sharing is approved **once**, in the desktop's own
+  dialog, shown just after the app window opens; the grant is then remembered and
+  every capture after that is silent. It needs the PipeWire bridge, which Ubuntu GNOME ships by
+  default and which is otherwise one command:
+
+  ```bash
+  sudo apt install python3-gi gstreamer1.0-pipewire gstreamer1.0-plugins-good gir1.2-gst-plugins-base-1.0
+  ```
+
+  Window titles are unavailable on Wayland by design — no compositor exposes them
+  — so that detector reports itself unavailable rather than recording nothing
+  silently; links come from browser history instead, which needs nothing
+  installed. The foreground application needs the bundled GNOME extension
+  (`npm run install:gnome-extension`, then log out and back in). Clipboard
+  detection works everywhere.
 
 Every detector reports its own availability in Debug Mode › Diagnostics, so an
 unsupported OS or a declined permission is visible rather than silent.
@@ -378,6 +468,78 @@ Whatever the outcome, Debug Mode › Diagnostics reports it in the
 **Link detection sources** row rather than claiming the source is fine.
 
 
+
+### Linux: `yarn start` aborts on the SUID sandbox helper
+
+```
+The SUID sandbox helper binary was found, but is not configured correctly.
+```
+
+Electron's `chrome-sandbox` must be owned by root with the setuid bit, and npm
+cannot set that when it unpacks the package. Every Electron project on Linux hits
+this once:
+
+```bash
+sudo chown root:root node_modules/electron/dist/chrome-sandbox && sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+```
+
+It has to be repeated whenever Electron is reinstalled or upgraded. Normally the
+unprivileged user-namespace sandbox would be used instead and none of this would
+arise, but Ubuntu 24.04 and later ship
+`kernel.apparmor_restrict_unprivileged_userns=1`, which closes that route.
+
+### Linux: a "Share Screen" dialog before every screenshot
+
+The app is falling back to Electron's own capture path. Open Debug Mode ›
+Diagnostics › Screen capture: the backend row names what is in use and why. Under
+Wayland it should read *Desktop portal (Wayland)*; if it reports the helper as
+unavailable, install the PipeWire bridge listed under
+[Platform permissions](#platform-permissions) and restart the app.
+
+The dialog is expected exactly once, just after the app window opens. Approve it — choosing
+"Entire screen" — and the grant is stored as `wayland-capture.json` in the data
+directory. Deleting that file makes the app ask again, which is the way to switch
+which screen is shared.
+
+### Linux: Applications Used records nothing
+
+Open Debug Mode › Diagnostics › Application detection. On Wayland, *Active window
+(X11)* is unavailable and always will be — the compositor does not expose other
+apps' windows to any client, and GNOME's `Introspect` API refuses callers outside
+its allowlist. *Focused window (GNOME Shell)* is the one that can work; if it
+reports the extension as missing, install it and log out:
+
+```bash
+npm run install:gnome-extension
+```
+
+Verify afterwards with:
+
+```bash
+gdbus call --session --dest org.timetracker.WindowInfo --object-path /org/timetracker/WindowInfo --method org.timetracker.WindowInfo.GetFocusedWindow
+```
+
+A base64 blob means it is working; `Error: ... not provided by any .service file`
+means the extension is not loaded — check `gnome-extensions info
+time-tracker-window-info@timetracker.local` and that you have logged back in.
+
+### Linux: opened links are not detected
+
+Under Wayland this is expected of the window-title source: no compositor lets one
+app read another's window titles, so it reports itself unavailable. Links come
+from browser history instead — check Debug Mode › Diagnostics › Link detection
+sources, where the *Browser history* row lists the profiles it found.
+
+If that row is missing entirely, the running build predates it: `yarn start`
+aborts on the SUID sandbox error above *after* rebuilding, which leaves a fresh
+`dist/` that never actually ran. Fix the sandbox, then start again.
+
+If it found none, the browser is installed somewhere the app does not look. It
+covers the deb, snap and Flatpak locations for Chrome, Chromium, Edge, Brave,
+Vivaldi, Opera, Firefox and Zen; anything else needs a path adding to `FAMILIES`
+in `src/main/services/link-tracker/sources/browser-history.ts`. Note that only
+visits made *during* a tracking session are recorded, so nothing appears until
+you open a page after pressing Start.
 
 ### macOS: "Electron.app was not opened because it contains malware"
 

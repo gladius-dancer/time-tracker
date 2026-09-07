@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import { desktopCapturer, screen, systemPreferences, type Display, type DesktopCapturerSource } from 'electron';
+import {
+  desktopCapturer,
+  nativeImage,
+  screen,
+  systemPreferences,
+  type Display,
+  type DesktopCapturerSource,
+} from 'electron';
 
 import type {
   CaptureId,
@@ -13,6 +20,7 @@ import type {
   TrackingSession,
 } from '../../shared/types';
 import type { Repository } from '../store/repository';
+import { matchFrame, WaylandCapture, type PortalCapture } from './wayland-capture';
 
 /**
  * Longest edge of a stored image. A 6K monitor would otherwise produce a ~20 MB
@@ -55,13 +63,55 @@ export class ScreenshotService {
   private tickIndex = 0;
   private sessionStartMs = 0;
 
+  /**
+   * Present only on a pure Wayland session, where `desktopCapturer` would show
+   * the compositor's screen-share picker before every single capture.
+   */
+  private readonly wayland: WaylandCapture | null;
+
   constructor(
     private readonly repository: Repository,
     private readonly events: ScreenshotEvents,
-  ) {}
+  ) {
+    this.wayland = WaylandCapture.isApplicable()
+      ? new WaylandCapture(join(repository.dataDir, 'wayland-capture.json'))
+      : null;
+  }
 
-  /** macOS gates screen capture behind an explicit user grant. */
+  /** The capture backend in use, for the diagnostics panel. */
+  get backend(): 'wayland-portal' | 'desktop-capturer' {
+    return this.wayland ? 'wayland-portal' : 'desktop-capturer';
+  }
+
+  /**
+   * Ask the OS for capture access up front. Returns true when something was
+   * actually asked, so the caller knows whether any state changed.
+   *
+   * Only Wayland has anything to ask for at a moment of our choosing: macOS
+   * prompts on first use through the system API, and nothing is required on
+   * Windows or X11.
+   */
+  async requestAccess(): Promise<boolean> {
+    if (!this.wayland || this.wayland.hasConsent()) return false;
+    const outcome = await this.wayland.ensureConsent();
+    console.log(`[screenshot] screen-capture access: ${outcome.detail}`);
+    return true;
+  }
+
+  /** Availability of the Wayland helper; resolves immediately elsewhere. */
+  async probeBackend(): Promise<{ available: boolean; detail: string }> {
+    if (!this.wayland) {
+      return { available: true, detail: 'Capturing through the Electron screen API.' };
+    }
+    return this.wayland.probe();
+  }
+
+  /**
+   * macOS gates screen capture behind an explicit user grant, and Wayland behind
+   * a portal grant that is only recorded once the user has approved the picker.
+   */
   permissionState(): PermissionState {
+    if (this.wayland) return this.wayland.hasConsent() ? 'granted' : 'not-determined';
     if (process.platform !== 'darwin') return 'granted';
     try {
       return systemPreferences.getMediaAccessStatus('screen') as PermissionState;
@@ -179,35 +229,55 @@ export class ScreenshotService {
     const displays = this.orderedDisplays();
 
     let sources: DesktopCapturerSource[] = [];
+    let portal: PortalCapture | null = null;
     let enumerationError: string | null = null;
-    try {
-      // One enumeration for the whole event. `thumbnailSize` is a bounding box and
-      // Chromium preserves each source's aspect ratio inside it, so a square box
-      // caps the longest edge of every monitor without distorting any of them --
-      // including rotated and portrait displays.
-      sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: MAX_CAPTURE_EDGE, height: MAX_CAPTURE_EDGE },
-        fetchWindowIcons: false,
-      });
-    } catch (error) {
-      enumerationError = this.explainFailure(error);
+
+    if (this.wayland) {
+      // No fallback to `desktopCapturer` here on purpose: it would work, but it
+      // would pop the compositor's share picker on every single capture, which is
+      // exactly what this backend exists to avoid.
+      portal = await this.wayland.capture();
+      enumerationError = portal.error;
+      if (!portal.error && !portal.restored) {
+        console.log('[screenshot] screen sharing approved; later captures will not prompt');
+      }
+    } else {
+      try {
+        // One enumeration for the whole event. `thumbnailSize` is a bounding box and
+        // Chromium preserves each source's aspect ratio inside it, so a square box
+        // caps the longest edge of every monitor without distorting any of them --
+        // including rotated and portrait displays.
+        sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: MAX_CAPTURE_EDGE, height: MAX_CAPTURE_EDGE },
+          fetchWindowIcons: false,
+        });
+      } catch (error) {
+        enumerationError = this.explainFailure(error);
+      }
     }
 
     const screenshots: Screenshot[] = [];
-    for (const [index, display] of displays.entries()) {
-      // Each monitor is independent: a failure here is recorded and the loop
-      // continues, so one bad display cannot cost us the others.
-      const record = await this.captureDisplay({
-        captureId,
-        session,
-        iso,
-        display,
-        index,
-        sources,
-        enumerationError,
-      });
-      screenshots.push(record);
+    try {
+      for (const [index, display] of displays.entries()) {
+        // Each monitor is independent: a failure here is recorded and the loop
+        // continues, so one bad display cannot cost us the others.
+        const record = await this.captureDisplay({
+          captureId,
+          session,
+          iso,
+          display,
+          index,
+          sources,
+          portal,
+          enumerationError,
+        });
+        screenshots.push(record);
+      }
+    } finally {
+      // The helper writes full-resolution PNGs to a temp directory; the images we
+      // keep have already been written to the screenshots directory by now.
+      await portal?.cleanup();
     }
 
     // A machine with no displays at all (headless CI, all monitors asleep) still
@@ -252,9 +322,10 @@ export class ScreenshotService {
     display: Display;
     index: number;
     sources: DesktopCapturerSource[];
+    portal: PortalCapture | null;
     enumerationError: string | null;
   }): Promise<Screenshot> {
-    const { captureId, session, iso, display, index, sources, enumerationError } = args;
+    const { captureId, session, iso, display, index, sources, portal, enumerationError } = args;
     const displayName = displayNameOf(display, index);
     const isPrimary = display.id === screen.getPrimaryDisplay().id;
 
@@ -274,19 +345,16 @@ export class ScreenshotService {
     if (enumerationError) return fail(enumerationError);
 
     try {
-      const source = matchSource(sources, display, index);
-      if (!source) {
-        return fail(`The system returned no capture source for ${displayName}.`);
-      }
-      if (source.thumbnail.isEmpty()) {
-        return fail(this.explainFailure(null));
-      }
+      const resolved = portal
+        ? await resolvePortalImage(portal, display, index, displayName)
+        : resolveSourceImage(sources, display, index, displayName, () => this.explainFailure(null));
+      if ('error' in resolved) return fail(resolved.error);
 
-      const png = source.thumbnail.toPNG();
+      const png = resolved.image.toPNG();
       if (png.byteLength === 0) {
         return fail(`${displayName} produced an empty image.`);
       }
-      const size = source.thumbnail.getSize();
+      const size = resolved.image.getSize();
 
       // Display id in the name keeps monitors from colliding within one event.
       const fileName = `${session.id}_${Date.parse(iso)}_display-${display.id}.png`;
@@ -431,4 +499,60 @@ export function matchSource<S extends SourceIdentity>(
   const anyIds = sources.some((s) => s.display_id);
   if (!anyIds && sources[index]) return sources[index];
   return null;
+}
+
+/**
+ * The slice of `NativeImage` the recording code touches. Naming it lets both
+ * backends -- and the test stub's fake thumbnails -- satisfy one contract.
+ */
+interface CaptureImage {
+  toPNG(): Buffer;
+  getSize(): { width: number; height: number };
+}
+
+type ImageResult = { image: CaptureImage } | { error: string };
+
+/** Electron's own capture path: the thumbnail is already scaled and in memory. */
+function resolveSourceImage(
+  sources: DesktopCapturerSource[],
+  display: Display,
+  index: number,
+  displayName: string,
+  explainEmpty: () => string,
+): ImageResult {
+  const source = matchSource(sources, display, index);
+  if (!source) return { error: `The system returned no capture source for ${displayName}.` };
+  if (source.thumbnail.isEmpty()) return { error: explainEmpty() };
+  return { image: source.thumbnail };
+}
+
+/**
+ * Wayland path: the helper wrote a full-resolution PNG per monitor, so the
+ * downscale `desktopCapturer` would have done via `thumbnailSize` happens here.
+ */
+async function resolvePortalImage(
+  portal: PortalCapture,
+  display: Display,
+  index: number,
+  displayName: string,
+): Promise<ImageResult> {
+  const frame = matchFrame(portal.frames, display, index);
+  if (!frame) return { error: `The desktop portal returned no image for ${displayName}.` };
+  if (frame.error || !frame.filePath) {
+    return { error: frame.error ?? `The desktop portal returned no image for ${displayName}.` };
+  }
+
+  const image = nativeImage.createFromBuffer(await fs.readFile(frame.filePath));
+  if (image.isEmpty()) return { error: `${displayName} produced an unreadable image.` };
+
+  const { width, height } = image.getSize();
+  const longest = Math.max(width, height);
+  if (longest <= MAX_CAPTURE_EDGE) return { image };
+  // Scale the longest edge only and let Electron derive the other, so portrait
+  // and rotated panels keep their aspect ratio.
+  return {
+    image: image.resize(
+      width >= height ? { width: MAX_CAPTURE_EDGE } : { height: MAX_CAPTURE_EDGE },
+    ),
+  };
 }

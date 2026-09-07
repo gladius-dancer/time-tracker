@@ -159,6 +159,20 @@ export const desktopCapturer = {
     }),
 };
 
+/**
+ * Only the Wayland capture path builds images from bytes, and that path never
+ * runs under the stub -- but the module is imported unconditionally, so the
+ * export has to exist.
+ */
+export const nativeImage = {
+  createFromBuffer: (buffer: Buffer) => ({
+    isEmpty: () => buffer.byteLength === 0,
+    toPNG: () => buffer,
+    getSize: () => ({ width: 0, height: 0 }),
+    resize: (_options: unknown) => nativeImage.createFromBuffer(buffer),
+  }),
+};
+
 export const screen = {
   getPrimaryDisplay: () => DISPLAYS[0],
   getAllDisplays: () => DISPLAYS,

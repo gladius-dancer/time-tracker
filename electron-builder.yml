@@ -13,6 +13,13 @@ files:
 
 asar: true
 
+# The Wayland capture helper is executed by python3, which cannot read a file
+# inside the asar archive, so it is copied out alongside it.
+extraResources:
+  - from: resources/linux
+    to: linux
+    filter: ['**/*']
+
 mac:
   category: public.app-category.productivity
   icon: build/icon.png

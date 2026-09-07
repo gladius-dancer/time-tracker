@@ -19,6 +19,7 @@ import type {
   SessionActivity,
   SessionId,
   Settings,
+  SourceStatus,
   StartResult,
   StopResult,
   TaskAppUsage,
@@ -42,6 +43,13 @@ import { Repository } from './store/repository';
  */
 export class AppController {
   readonly repository: Repository;
+  /** Filled in by `init`; the panel reads it before any capture has run. */
+  private captureBackend: SourceStatus = {
+    id: 'unknown',
+    label: 'Screen capture',
+    available: false,
+    detail: 'Not probed yet.',
+  };
   private readonly tracker: TimeTracker;
   private readonly screenshots: ScreenshotService;
   private readonly links: LinkTracker;
@@ -101,6 +109,32 @@ export class AppController {
 
   async init(): Promise<void> {
     await Promise.all([this.links.probeSources(), this.appUsage.probeSources()]);
+    await this.refreshCaptureBackend();
+  }
+
+  private async refreshCaptureBackend(): Promise<void> {
+    this.captureBackend = {
+      id: this.screenshots.backend,
+      label: this.screenshots.backend === 'wayland-portal' ? 'Desktop portal (Wayland)' : 'Electron screen capture',
+      ...(await this.screenshots.probeBackend()),
+    };
+  }
+
+  /**
+   * Ask the desktop for screen-capture access, if this platform asks at all.
+   *
+   * Called once the window is up, so the dialog arrives while the user is
+   * looking at the app they just started rather than interrupting them later,
+   * when a scheduled capture would otherwise have been the first thing to ask.
+   * Already granted means nothing is shown and nothing is asked.
+   */
+  async requestCaptureAccess(): Promise<void> {
+    if (!(await this.screenshots.requestAccess())) return;
+    // The answer changes what Diagnostics should say, and the panel may already
+    // be open, so re-probe and push the new state rather than waiting for the
+    // next thing to happen to trigger a broadcast.
+    await this.refreshCaptureBackend();
+    this.broadcast(IpcEvent.SnapshotChanged, this.snapshot());
   }
 
   // -- broadcasting --------------------------------------------------------
@@ -155,6 +189,7 @@ export class AppController {
   private diagnostics(): Diagnostics {
     return {
       screenPermission: this.screenshots.permissionState(),
+      captureBackend: this.captureBackend,
       notifications: this.notifications.diagnostics(),
       displays: this.screenshots.describeDisplays(),
       linkSources: this.links.sourceStatuses,

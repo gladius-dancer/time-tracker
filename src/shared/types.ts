@@ -124,7 +124,7 @@ export interface ScreenshotEvent {
 // ---------------------------------------------------------------------------
 
 /** Where a URL was observed. */
-export type LinkSource = 'clipboard' | 'browser-window' | 'app-protocol' | 'manual';
+export type LinkSource = 'clipboard' | 'browser-window' | 'browser-history' | 'app-protocol' | 'manual';
 
 export interface OpenedLink {
   id: LinkId;
@@ -257,6 +257,8 @@ export interface NotificationDiagnostics {
 
 export interface Diagnostics {
   screenPermission: PermissionState;
+  /** Which capture backend is in use, and whether it is ready. */
+  captureBackend: SourceStatus;
   /** Per-source availability for link tracking on this OS. */
   linkSources: SourceStatus[];
   /** Per-source availability for foreground-application detection on this OS. */
