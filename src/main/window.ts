@@ -56,6 +56,8 @@ async function safeOpenExternal(url: string): Promise<void> {
       await shell.openExternal(parsed.toString());
     }
   } catch {
+
     // Not a URL we are willing to hand to the OS.
+
   }
 }
