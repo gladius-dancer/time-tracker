@@ -75,6 +75,8 @@ function handleDeepLink(raw: string): void {
     const target = parsed.searchParams.get('url');
     if (target) controller?.recordExternalLink(target);
   } catch {
+
     // Ignore malformed deep links.
+
   }
 }
