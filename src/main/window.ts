@@ -58,4 +58,5 @@ async function safeOpenExternal(url: string): Promise<void> {
   } catch {
     // Not a URL we are willing to hand to the OS.
   }
+
 }
