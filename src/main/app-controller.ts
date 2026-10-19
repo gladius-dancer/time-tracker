@@ -548,4 +548,5 @@ function summariseApps(periods: AppUsagePeriod[]): AppUsageSummary[] {
   }
 
   return [...byApp.values()].sort((a, b) => b.totalMs - a.totalMs);
+
 }
